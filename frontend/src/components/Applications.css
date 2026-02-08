@@ -1,0 +1,167 @@
+.applications {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.applications h2 {
+  color: #1f77b4;
+  margin-bottom: 0.5rem;
+}
+
+.stats-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+  padding: 1.5rem;
+  background: #f0f8ff;
+  border: 1px solid #1f77b4;
+  border-radius: 4px;
+}
+
+.stat-item {
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 2rem;
+  font-weight: bold;
+  color: #1f77b4;
+}
+
+.stat-label {
+  font-size: 0.9rem;
+  color: #666;
+  margin-top: 0.25rem;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 1rem;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.form-group label {
+  font-weight: 600;
+  color: #333;
+}
+
+.form-group input,
+.form-group select {
+  padding: 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 1rem;
+  font-family: inherit;
+}
+
+.loading,
+.no-applications {
+  text-align: center;
+  padding: 2rem;
+  color: #666;
+}
+
+.error-message {
+  padding: 1rem;
+  background: #fee;
+  border: 1px solid #fcc;
+  border-radius: 4px;
+  color: #c33;
+}
+
+.applications-count {
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 1rem;
+}
+
+.applications-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.application-card {
+  padding: 1.5rem;
+  background: #f9f9f9;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  transition: box-shadow 0.3s;
+}
+
+.application-card:hover {
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.application-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.application-header h3 {
+  margin: 0;
+  color: #1f77b4;
+  font-size: 1.25rem;
+}
+
+.company-name {
+  color: #666;
+  font-size: 1rem;
+}
+
+.application-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.detail-item {
+  font-size: 0.9rem;
+}
+
+.detail-item strong {
+  color: #333;
+  margin-right: 0.5rem;
+}
+
+.application-links {
+  margin-bottom: 1rem;
+}
+
+.application-links a {
+  color: #1f77b4;
+  text-decoration: none;
+  margin-right: 1rem;
+}
+
+.application-links a:hover {
+  text-decoration: underline;
+}
+
+.application-actions {
+  padding-top: 1rem;
+  border-top: 1px solid #e0e0e0;
+}
+
+.application-actions label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.application-actions select {
+  padding: 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}

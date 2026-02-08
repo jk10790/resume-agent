@@ -1,7 +1,8 @@
 # test_google_docs.py
 
 from datetime import datetime
-from google_docs import (
+from resume_agent.config import GOOGLE_FOLDER_ID, RESUME_DOC_ID
+from resume_agent.storage.google_docs import (
     get_services,
     get_or_create_folder,
     get_file_id_by_name,
@@ -12,15 +13,17 @@ from google_docs import (
 
 def test_google_docs():
     drive_service, docs_service = get_services()
+    parent_folder_id = GOOGLE_FOLDER_ID
+    master_doc_id = RESUME_DOC_ID
 
     # 1. Locate parent folder
-    parent_folder_name = "ResumeTailor"
-    parent_folder_id = get_or_create_folder(drive_service, parent_folder_name)
+    # parent_folder_name = "ResumeTailor"
+    # parent_folder_id = get_or_create_folder(drive_service, parent_folder_name)
     print(f"✅ Parent folder ID: {parent_folder_id}")
 
     # 2. Locate master resume doc
-    master_doc_name = "jaikiran_resume"
-    master_doc_id = get_file_id_by_name(drive_service, master_doc_name, parent_folder_id)
+    # master_doc_name = "jaikiran_resume"
+    # master_doc_id = get_file_id_by_name(drive_service, master_doc_name, parent_folder_id)
 
     # DEBUG: List all files in the folder
     results = drive_service.files().list(

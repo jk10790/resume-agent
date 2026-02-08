@@ -1,0 +1,14 @@
+Capital One is seeking a Senior Manager, Software Engineering with experience leading diverse technology teams. The ideal candidate has...
+
+Basic Qualifications:
+- Bachelor’s degree
+- At least 9 years of software engineering experience
+- At least 4 years of people management
+- Experience with Java, Python, TypeScript, SQL, or Go
+- Cloud experience (AWS, Azure, or GCP)
+
+Preferred Qualifications:
+- Master’s degree in Computer Science or related field
+- Experience with Agile
+- Open source frameworks and NoSQL databases
+- Container orchestration

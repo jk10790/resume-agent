@@ -1,0 +1,86 @@
+.extract-jd {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.extract-jd h2 {
+  color: #1f77b4;
+  margin-bottom: 1rem;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.form-group label {
+  font-weight: 600;
+  color: #333;
+}
+
+.form-group input {
+  padding: 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 1rem;
+}
+
+.form-group input:disabled {
+  background: #f5f5f5;
+  cursor: not-allowed;
+}
+
+.error-message {
+  padding: 1rem;
+  background: #fee;
+  border: 1px solid #fcc;
+  border-radius: 4px;
+  color: #c33;
+}
+
+.primary-button {
+  padding: 1rem 2rem;
+  background: #1f77b4;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.3s;
+}
+
+.primary-button:hover:not(:disabled) {
+  background: #155a8a;
+}
+
+.primary-button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.result-container {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background: #f0f8ff;
+  border: 1px solid #1f77b4;
+  border-radius: 4px;
+}
+
+.result-container h3 {
+  color: #1f77b4;
+  margin-bottom: 1rem;
+}
+
+.jd-text {
+  width: 100%;
+  padding: 1rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 1rem;
+  line-height: 1.5;
+  resize: vertical;
+}

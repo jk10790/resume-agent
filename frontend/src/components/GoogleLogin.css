@@ -1,0 +1,156 @@
+.google-login {
+  margin: 0;
+}
+
+.auth-loading {
+  padding: 1rem;
+  text-align: center;
+  color: #666;
+}
+
+.auth-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  gap: 0.75rem;
+}
+
+.auth-status.authenticated {
+  background: #e8f5e9;
+  border-color: #4caf50;
+}
+
+.auth-status.not-authenticated {
+  background: #fff3e0;
+  border-color: #ff9800;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid #4caf50;
+}
+
+.user-details {
+  display: flex;
+  flex-direction: column;
+}
+
+.user-name {
+  font-weight: 600;
+  color: #2e7d32;
+  font-size: 0.85rem;
+}
+
+.user-email {
+  font-size: 0.75rem;
+  color: #666;
+}
+
+.auth-prompt {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  flex-direction: column;
+  text-align: center;
+}
+
+.auth-prompt p {
+  margin: 0;
+  color: #e65100;
+  font-size: 0.9rem;
+}
+
+.google-signin-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: white;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #3c4043;
+  transition: all 0.2s;
+}
+
+.google-signin-btn:hover:not(:disabled) {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  background: #f8f9fa;
+}
+
+.google-signin-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.google-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.auth-warning {
+  color: #f57c00;
+  font-weight: 500;
+  margin: 0.5rem 0 !important;
+}
+
+.auth-error {
+  color: #d32f2f;
+  font-size: 0.85rem;
+  margin: 0.5rem 0 !important;
+}
+
+.auth-info {
+  color: #666;
+  font-size: 0.85rem;
+  margin: 0.5rem 0 !important;
+  font-style: italic;
+}
+
+.logout-btn {
+  padding: 0.5rem 1rem;
+  background: #f44336;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.logout-btn:hover {
+  background: #d32f2f;
+}
+
+@media (max-width: 768px) {
+  .auth-status {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .auth-prompt {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .google-signin-btn {
+    justify-content: center;
+  }
+}

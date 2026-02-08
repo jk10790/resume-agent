@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+
+# Google OAuth
+token.json
+credentials.json
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Node/React
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.npm
+frontend/.yarn
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Application specific
+change_logs/
+resume_versions/
+memory.json
+applications.db
+.agent_cache/
+.cache/
+tailoring_cache.json
