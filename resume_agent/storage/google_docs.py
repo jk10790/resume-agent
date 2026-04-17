@@ -1,27 +1,22 @@
 # google_docs.py
+# Google Drive/Docs — use session-based credentials from the web app only.
 
+from io import BytesIO
 from typing import Optional, Dict, Any
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from .google_auth import get_credentials
-from ..utils.exceptions import GoogleAPIError
+from .google_drive_utils import get_file_metadata, GOOGLE_DOC_MIME, PDF_MIME
+from ..utils.exceptions import ConfigError, GoogleAPIError
 from ..utils.logger import logger
 import re
 
 def get_services():
-    """Get Google Drive and Docs services with error handling"""
-    try:
-        creds = get_credentials()
-        drive_service = build('drive', 'v3', credentials=creds)
-        docs_service = build('docs', 'v1', credentials=creds)
-        return drive_service, docs_service
-    except HttpError as e:
-        raise GoogleAPIError(
-            f"Failed to initialize Google services: {e}",
-            status_code=e.resp.status if hasattr(e, 'resp') else None
-        )
-    except Exception as e:
-        raise GoogleAPIError(f"Unexpected error initializing Google services: {e}")
+    """Raises: Google is session-only; sign in via the web app."""
+    raise ConfigError(
+        "Google auth is session-only. Sign in with Google in the web app to use Drive/Docs.",
+        config_key="google_services",
+        fix_instructions="Open the Resume Agent web app and sign in with Google.",
+    )
 
 def get_folder_id_by_name(drive_service, folder_name, parent_id=None):
     query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder'"
@@ -70,21 +65,85 @@ def read_google_doc(docs_service, doc_id):
             status_code=e.resp.status if hasattr(e, 'resp') else None
         )
 
+
+def _extract_text_from_pdf(pdf_bytes: bytes) -> str:
+    """Extract text from PDF bytes. Returns empty string on failure."""
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(BytesIO(pdf_bytes))
+        parts = []
+        for page in reader.pages:
+            try:
+                t = page.extract_text()
+                if t:
+                    parts.append(t)
+            except Exception:
+                pass
+        return "\n".join(parts).strip() if parts else ""
+    except Exception as e:
+        logger.warning(f"PDF text extraction failed: {e}")
+        return ""
+
+
+def read_resume_file(drive_service, docs_service, file_id: str, mime_type: Optional[str] = None) -> str:
+    """
+    Read resume content from a Drive file. Supports Google Docs and PDFs.
+    If mime_type is None, it is fetched from Drive metadata.
+    """
+    if mime_type is None:
+        meta = get_file_metadata(drive_service, file_id)
+        if not meta:
+            raise GoogleAPIError(f"File not found or inaccessible: {file_id}")
+        mime_type = meta.get("mimeType", "")
+
+    if mime_type == GOOGLE_DOC_MIME:
+        return read_google_doc(docs_service, file_id)
+
+    if mime_type == PDF_MIME:
+        resp = drive_service.files().get_media(fileId=file_id).execute()
+        if isinstance(resp, str):
+            resp = resp.encode("latin-1")
+        text = _extract_text_from_pdf(resp)
+        if not text:
+            raise GoogleAPIError(f"Could not extract text from PDF: {file_id}")
+        return text
+
+    raise GoogleAPIError(f"Unsupported file type for resume: {mime_type}")
+
+
+def create_google_doc_in_folder(drive_service, folder_id: str, name: str, content: str, docs_service=None) -> str:
+    """
+    Create a new Google Doc in the given folder with the given content.
+    Returns the new document id.
+    Pass docs_service when using session credentials so the same creds are used for writing.
+    """
+    body = {
+        "name": name,
+        "mimeType": "application/vnd.google-apps.document",
+        "parents": [folder_id],
+    }
+    created = drive_service.files().create(body=body, fields="id", supportsAllDrives=True).execute()
+    doc_id = created["id"]
+    write_to_google_doc(doc_id, content, docs_service=docs_service)
+    return doc_id
+
+
 def copy_google_doc(drive_service, source_doc_id, new_name, parent_id):
     body = {'name': new_name, 'parents': [parent_id]}
     copied = drive_service.files().copy(fileId=source_doc_id, body=body).execute()
     return copied['id']
 
-def write_to_google_doc(doc_id, content):
+def write_to_google_doc(doc_id, content, docs_service=None):
     """
     Write markdown-formatted content to Google Doc with proper formatting.
-    Handles headings, bullets, bold text, and preserves spacing.
+    docs_service is required (from session via get_google_services_from_request).
     """
-    from .google_auth import get_credentials
-    from googleapiclient.discovery import build
-
-    creds = get_credentials()
-    docs_service = build("docs", "v1", credentials=creds)
+    if docs_service is None:
+        raise ConfigError(
+            "docs_service is required. Use the web app and sign in with Google.",
+            config_key="docs_service",
+            fix_instructions="Call write_to_google_doc with docs_service from the request session.",
+        )
 
     # Clear existing content
     doc = docs_service.documents().get(documentId=doc_id).execute()

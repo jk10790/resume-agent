@@ -6,6 +6,7 @@ const GoogleLogin = ({ onAuthChange }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [oauthConfigured, setOauthConfigured] = useState(true);
+  const [backendAvailable, setBackendAvailable] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -14,14 +15,19 @@ const GoogleLogin = ({ onAuthChange }) => {
 
   const checkAuthStatus = async () => {
     try {
+      setError(null);
       const response = await fetch('/api/auth/google/status', {
         credentials: 'include'
       });
+      if (!response.ok) {
+        throw new Error(`Auth status request failed with ${response.status}`);
+      }
       const data = await response.json();
       
       setIsAuthenticated(data.authenticated);
       setUser(data.user || null);
-      setOauthConfigured(data.oauth_configured !== false); // Default to true if not present
+      setOauthConfigured(Boolean(data.oauth_configured));
+      setBackendAvailable(true);
       
       if (onAuthChange) {
         onAuthChange(data.authenticated, data.user);
@@ -29,7 +35,8 @@ const GoogleLogin = ({ onAuthChange }) => {
     } catch (error) {
       console.error('Error checking auth status:', error);
       setIsAuthenticated(false);
-      setOauthConfigured(false);
+      setBackendAvailable(false);
+      setError('Cannot reach the backend at http://localhost:8000. Check /tmp/resume-agent-backend.log.');
     } finally {
       setLoading(false);
     }
@@ -101,6 +108,21 @@ const GoogleLogin = ({ onAuthChange }) => {
           <button onClick={handleLogout} className="logout-btn">
             Logout
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!backendAvailable && !isAuthenticated) {
+    return (
+      <div className="google-login">
+        <div className="auth-status not-authenticated">
+          <div className="auth-prompt">
+            <p className="auth-warning">
+              Backend is unavailable. The frontend cannot reach `/api/auth/google/status`.
+            </p>
+            {error && <p className="auth-error">{error}</p>}
+          </div>
         </div>
       </div>
     );

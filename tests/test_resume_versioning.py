@@ -124,7 +124,10 @@ class TestResumeVersionService:
         v2 = version_service.save_version(resume2, job=job)
         
         diff = version_service.compare_versions(v1.version_id, v2.version_id)
-        assert "Original" in diff or "Modified" in diff
+        diff_path = Path(diff)
+        assert diff_path.exists()
+        diff_text = diff_path.read_text()
+        assert "Original" in diff_text or "Modified" in diff_text
     
     def test_delete_version(self, version_service):
         """Test deleting a version"""

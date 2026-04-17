@@ -4,7 +4,6 @@ Legacy facade: evaluates resume fit from raw resume and JD text.
 Delegates to ResumeParserAgent, JDAnalyzerAgent, and FitEvaluatorAgent.
 """
 
-from ..storage.user_memory import get_skills
 from ..models.resume import FitEvaluation
 from ..services.llm_service import LLMService
 from ..utils.logger import logger
@@ -17,6 +16,7 @@ def evaluate_resume_fit(
     model,
     resume_text: str,
     jd_text: str,
+    known_skills: list[str] | None = None,
     prompt_version: str = PROMPT_VERSION,
 ) -> FitEvaluation:
     """
@@ -29,9 +29,9 @@ def evaluate_resume_fit(
         from .jd_analyzer_agent import JDAnalyzerAgent
         from .fit_evaluator_agent import FitEvaluatorAgent
 
-        parser = ResumeParserAgent(llm_service)
+        parser = ResumeParserAgent(llm_service, confirmed_skills=known_skills)
         jd_analyzer = JDAnalyzerAgent(llm_service)
-        fit_agent = FitEvaluatorAgent(llm_service)
+        fit_agent = FitEvaluatorAgent(llm_service, confirmed_skills=known_skills)
         parsed = parser.parse(resume_text, use_cache=False)
         analyzed = jd_analyzer.analyze(jd_text, use_cache=False)
         evaluation = fit_agent.evaluate_fit(parsed, analyzed)
@@ -53,10 +53,9 @@ def _evaluate_fit_structured_fallback(
     prompt_version: str,
 ) -> FitEvaluation:
     """Fallback using LLMService structured evaluation."""
-    known_skills = get_skills()
     return llm_service.evaluate_fit_structured(
         resume_text=resume_text,
         jd_text=jd_text,
-        known_skills=known_skills,
+        known_skills=known_skills or [],
         prompt_version=prompt_version,
     )

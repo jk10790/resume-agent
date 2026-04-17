@@ -12,6 +12,11 @@ from pathlib import Path
 
 class StructuredLogger:
     """Structured logger with JSON support"""
+
+    @staticmethod
+    def _safe_json_dumps(payload: Dict[str, Any]) -> str:
+        """Serialize payload to JSON, coercing unknown objects (e.g. Exceptions) to strings."""
+        return json.dumps(payload, default=str)
     
     def __init__(self, name: str, log_file: Optional[str] = None, level: int = logging.INFO):
         self.logger = logging.getLogger(name)
@@ -48,7 +53,7 @@ class StructuredLogger:
     def info(self, message: str, **kwargs):
         """Log info message with optional structured data"""
         if kwargs:
-            structured = json.dumps({
+            structured = self._safe_json_dumps({
                 "message": message,
                 "timestamp": datetime.now().isoformat(),
                 **kwargs
@@ -68,14 +73,14 @@ class StructuredLogger:
             error_data["error_type"] = type(error).__name__
             error_data["error_message"] = str(error)
         
-        self.logger.error(json.dumps(error_data))
+        self.logger.error(self._safe_json_dumps(error_data))
         if error:
-            self.logger.exception(error)
+            self.logger.exception(str(error))
     
     def warning(self, message: str, **kwargs):
         """Log warning message"""
         if kwargs:
-            structured = json.dumps({
+            structured = self._safe_json_dumps({
                 "message": message,
                 "timestamp": datetime.now().isoformat(),
                 **kwargs
@@ -87,7 +92,7 @@ class StructuredLogger:
     def debug(self, message: str, **kwargs):
         """Log debug message"""
         if kwargs:
-            structured = json.dumps({
+            structured = self._safe_json_dumps({
                 "message": message,
                 "timestamp": datetime.now().isoformat(),
                 **kwargs

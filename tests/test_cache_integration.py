@@ -6,10 +6,7 @@ Tests the smart caching system integration with the workflow.
 import pytest
 import tempfile
 import os
-import json
-from pathlib import Path
-from resume_agent.utils.cache_tailoring import TailoringCache, TailoringPattern
-from datetime import datetime
+from resume_agent.utils.cache_tailoring import TailoringCache
 
 
 @pytest.fixture
@@ -29,7 +26,7 @@ class TestCacheBasicOperations:
         """Test cache can be initialized"""
         cache = TailoringCache(cache_file=temp_cache_file)
         assert cache is not None
-        assert len(cache.patterns) == 0
+        assert cache.get_all_patterns() == []
     
     def test_save_pattern(self, temp_cache_file):
         """Test saving a pattern to cache"""
@@ -50,8 +47,8 @@ class TestCacheBasicOperations:
         )
         
         assert pattern_id is not None
-        assert len(cache.patterns) == 1
-        assert pattern_id in cache.patterns
+        assert len(cache.get_all_patterns()) == 1
+        assert cache.get_pattern(pattern_id) is not None
     
     def test_find_similar_patterns(self, temp_cache_file):
         """Test finding similar patterns"""
@@ -109,11 +106,12 @@ class TestCacheBasicOperations:
             quality_score=80
         )
         
-        assert len(cache.patterns) == 1
+        assert len(cache.get_all_patterns()) == 1
         
         deleted = cache.delete_pattern(pattern_id)
         assert deleted is True
-        assert len(cache.patterns) == 0
+        assert cache.get_pattern(pattern_id) is None
+        assert len(cache.get_all_patterns()) == 0
     
     def test_clear_cache(self, temp_cache_file):
         """Test clearing all patterns"""
@@ -129,10 +127,10 @@ class TestCacheBasicOperations:
                 quality_score=80
             )
         
-        assert len(cache.patterns) == 3
+        assert len(cache.get_all_patterns()) == 3
         
         cache.clear_cache()
-        assert len(cache.patterns) == 0
+        assert len(cache.get_all_patterns()) == 0
     
     def test_get_cache_stats(self, temp_cache_file):
         """Test getting cache statistics"""
@@ -239,7 +237,7 @@ class TestCachePersistence:
     """Test cache persistence"""
     
     def test_cache_persists(self, temp_cache_file):
-        """Test that cache persists to file"""
+        """Test that cache persists across cache instances (SQLite-backed)."""
         cache1 = TailoringCache(cache_file=temp_cache_file)
         
         pattern_id = cache1.save_pattern(
@@ -253,8 +251,8 @@ class TestCachePersistence:
         # Create new cache instance (should load from file)
         cache2 = TailoringCache(cache_file=temp_cache_file)
         
-        assert len(cache2.patterns) == 1
-        assert pattern_id in cache2.patterns
+        assert len(cache2.get_all_patterns()) == 1
+        assert cache2.get_pattern(pattern_id) is not None
     
     def test_cache_updates_existing_pattern(self, temp_cache_file):
         """Test that similar patterns update existing instead of creating new"""
@@ -283,6 +281,8 @@ class TestCachePersistence:
         
         # Should be same pattern ID (updated)
         assert pattern_id1 == pattern_id2
-        assert len(cache.patterns) == 1
-        assert cache.patterns[pattern_id1].quality_score == 85  # Updated to higher score
-        assert cache.patterns[pattern_id1].used_count == 2  # Used twice
+        assert len(cache.get_all_patterns()) == 1
+        pattern = cache.get_pattern(pattern_id1)
+        assert pattern is not None
+        assert pattern.quality_score == 85  # Updated to higher score
+        assert pattern.used_count == 2  # Used twice

@@ -1,6 +1,7 @@
 # scripts/setup_env.py
+# Setup .env with folder/doc IDs. Google Drive requires signing in via the web app;
+# you can also set GOOGLE_FOLDER_ID and RESUME_DOC_ID manually in .env.
 
-from resume_agent.storage.google_docs import get_services
 import os
 
 ENV_FILE = ".env"
@@ -38,7 +39,15 @@ def get_file_id_by_name(drive_service, file_name, folder_id):
     return files[0]["id"] if files else None
 
 def setup_env_from_user_input():
-    drive_service, _ = get_services()
+    print("🔧 Google Drive/Docs use session-based auth (web app only).")
+    print("To discover folder/doc IDs: sign in at the web app, then use the Drive picker or set in .env manually.\n")
+    try:
+        from resume_agent.storage.google_docs import get_services
+        drive_service, _ = get_services()
+    except Exception as e:
+        print(f"Cannot get Google services from this script: {e}")
+        print("Set GOOGLE_FOLDER_ID and RESUME_DOC_ID in .env manually, or use the web app.")
+        return
 
     print("🔧 Setting up your .env environment...\n")
 

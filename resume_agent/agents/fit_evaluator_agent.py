@@ -4,13 +4,12 @@ Strictly responsible for mapping parsed resume to analyzed JD and determining fi
 This agent ONLY evaluates fit - it does NOT tailor or modify anything.
 """
 
-from typing import Dict, List, Any, TYPE_CHECKING
+from typing import Dict, List, Any, Optional, TYPE_CHECKING
 from pydantic import ValidationError
 from ..services.llm_service import LLMService
 from ..utils.logger import logger
 from ..models.resume import FitEvaluation
 from ..models.agent_models import FitAnalysis, FitAnalysisStructured
-from ..storage.user_memory import get_skills
 import json
 import re
 
@@ -49,9 +48,9 @@ class FitEvaluatorAgent:
     This agent does NOT tailor or modify the resume.
     """
     
-    def __init__(self, llm_service: LLMService):
+    def __init__(self, llm_service: LLMService, confirmed_skills: Optional[List[str]] = None):
         self.llm_service = llm_service
-        self.confirmed_skills = get_skills()
+        self.confirmed_skills = list(confirmed_skills or [])
     
     def evaluate_fit(
         self,

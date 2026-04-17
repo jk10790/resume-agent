@@ -4,7 +4,7 @@ Versioned prompts for different use cases.
 """
 
 from langchain_core.prompts import ChatPromptTemplate
-from typing import Dict
+from typing import Dict, Optional
 
 
 # Fit Evaluation Prompts
@@ -300,29 +300,43 @@ PROMPT_REGISTRY: Dict[str, Dict[str, ChatPromptTemplate]] = {
 }
 
 
+def _prompt_from_skill(skill_id: str) -> Optional[ChatPromptTemplate]:
+    """Build ChatPromptTemplate from skills loader if available and non-empty."""
+    try:
+        from ..skills.loader import load_instruction
+        parsed = load_instruction(skill_id)
+        if not parsed or not (parsed.get("system") or parsed.get("human_template")):
+            return None
+        return ChatPromptTemplate.from_messages([
+            ("system", parsed.get("system", "")),
+            ("human", parsed.get("human_template", "")),
+        ])
+    except Exception:
+        return None
+
+
 def get_prompt(prompt_name: str, version: str = "latest") -> ChatPromptTemplate:
     """
     Get a prompt template by name and version.
-    
-    Args:
-        prompt_name: Name of the prompt (e.g., "fit_evaluation")
-        version: Version to use ("latest", "v1", "v2", etc.)
-    
-    Returns:
-        ChatPromptTemplate instance
-    
-    Raises:
-        ValueError: If prompt name or version not found
+    Uses skills loader when available (Path A compatible); otherwise falls back to PROMPT_REGISTRY.
     """
     if prompt_name not in PROMPT_REGISTRY:
         raise ValueError(f"Prompt '{prompt_name}' not found. Available: {list(PROMPT_REGISTRY.keys())}")
-    
     prompt_versions = PROMPT_REGISTRY[prompt_name]
-    
     if version not in prompt_versions:
         available = list(prompt_versions.keys())
         raise ValueError(f"Version '{version}' not found for '{prompt_name}'. Available: {available}")
-    
+
+    # Prefer skills loader for resume_tailoring (latest) and fit_evaluation (latest, v2)
+    if prompt_name == "resume_tailoring" and version == "latest":
+        t = _prompt_from_skill("tailor_resume")
+        if t is not None:
+            return t
+    if prompt_name == "fit_evaluation" and version in ("latest", "v2"):
+        t = _prompt_from_skill("evaluate_fit")
+        if t is not None:
+            return t
+
     return prompt_versions[version]
 
 

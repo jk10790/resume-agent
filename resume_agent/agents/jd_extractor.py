@@ -23,7 +23,31 @@ def extract_raw_text(url):
         soup = BeautifulSoup(response.text, "html.parser")
         elements = soup.find_all(["p", "li", "div"])
         visible_text = "\n".join(e.get_text(strip=True) for e in elements if e.get_text(strip=True))
-        return visible_text.strip()
+        visible_text = visible_text.strip()
+        if visible_text:
+            return visible_text
+
+        # Fallback for thin/client-rendered pages where body blocks are empty.
+        fallback_parts = []
+        title = (soup.title.string or "").strip() if soup.title and soup.title.string else ""
+        if title:
+            fallback_parts.append(title)
+        for meta_name in ("description", "og:description", "twitter:description"):
+            tag = soup.find("meta", attrs={"name": meta_name}) or soup.find("meta", attrs={"property": meta_name})
+            content = tag.get("content", "").strip() if tag else ""
+            if content:
+                fallback_parts.append(content)
+        fallback_text = "\n".join(part for part in fallback_parts if part).strip()
+        if fallback_text:
+            return fallback_text
+
+        raise ExtractionError(
+            (
+                f"No readable job description content was found at {url}. "
+                "This page may require JavaScript rendering or login. Paste the JD text manually instead."
+            ),
+            url=url,
+        )
     except requests.exceptions.RequestException as e:
         raise ExtractionError(
             f"Failed to fetch URL {url}: {e}",
@@ -53,6 +77,11 @@ def prompt_llm_to_extract_jd(llm_service, raw_text, style="default"):
     }
 
     from ..services.llm_service import LLMService
+    trimmed_text = (raw_text or "").strip()
+    if not trimmed_text:
+        raise ExtractionError(
+            "No readable job description text was extracted from the page. Paste the JD text manually instead."
+        )
     
     # Handle both LLMService and legacy model instances
     if isinstance(llm_service, LLMService):
@@ -60,7 +89,7 @@ def prompt_llm_to_extract_jd(llm_service, raw_text, style="default"):
         
         messages = [
             SystemMessage(content=system_prompts.get(style, system_prompts["default"])),
-            HumanMessage(content=raw_text[:settings.jd_text_limit])  # avoid hitting context limits
+            HumanMessage(content=trimmed_text[:settings.jd_text_limit])  # avoid hitting context limits
         ]
         return llm_service.invoke_with_retry(messages)
     else:
@@ -69,7 +98,7 @@ def prompt_llm_to_extract_jd(llm_service, raw_text, style="default"):
         
         prompt = [
             SystemMessage(content=system_prompts.get(style, system_prompts["default"])),
-            HumanMessage(content=raw_text[:settings.jd_text_limit])
+            HumanMessage(content=trimmed_text[:settings.jd_text_limit])
         ]
         return llm_service.invoke(prompt)
 

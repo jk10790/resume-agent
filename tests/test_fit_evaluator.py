@@ -1,6 +1,8 @@
 # test_fit_evaluator.py
+# Requires Google session (web app) for get_services().
 
 import os
+import pytest
 from dotenv import load_dotenv
 from langchain_ollama import OllamaLLM
 from resume_agent.config import OLLAMA_MODEL, RESUME_DOC_ID
@@ -13,7 +15,10 @@ load_dotenv()
 model = OllamaLLM(model=OLLAMA_MODEL)
 
 def test_fit_evaluator():
-    drive_service, docs_service = get_services()
+    try:
+        drive_service, docs_service = get_services()
+    except Exception as e:
+        pytest.skip(f"Google is session-only: {e}. Use the web app.")
 
     resume_text = read_google_doc(docs_service, RESUME_DOC_ID)
     print("\n📄 Loaded resume content\n")

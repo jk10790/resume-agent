@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Resume Agent – Settings</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 24px auto; padding: 0 16px; }
+    h1 { font-size: 18px; }
+    label { display: block; margin-top: 12px; font-weight: 500; }
+    input { width: 100%; padding: 8px; margin-top: 4px; border: 1px solid #ccc; border-radius: 4px; }
+    button { margin-top: 16px; padding: 10px 20px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    .hint { font-size: 12px; color: #6b7280; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Resume Agent – Settings</h1>
+  <label>API base URL</label>
+  <input type="text" id="apiBase" placeholder="http://localhost:8000">
+  <p class="hint">Backend API (e.g. http://localhost:8000). Must be running and CORS must allow this extension.</p>
+  <label>Web app URL</label>
+  <input type="text" id="appUrl" placeholder="http://localhost:3000">
+  <p class="hint">Opened when you click “Tailor resume” (e.g. http://localhost:3000).</p>
+  <label>Resume Doc ID (optional)</label>
+  <input type="text" id="resumeDocId" placeholder="Google Doc ID of your resume">
+  <p class="hint">Paste a Google Doc URL or a doc ID. If not set, the API uses its default RESUME_DOC_ID.</p>
+  <button id="save">Save</button>
+  <script src="options.js"></script>
+</body>
+</html>

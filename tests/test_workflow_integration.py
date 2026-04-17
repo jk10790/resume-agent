@@ -69,7 +69,7 @@ class TestWorkflowService:
         """Test loading resume with custom doc ID"""
         service = ResumeWorkflowService(google_services=mock_google_services)
         
-        with patch('resume_agent.services.resume_workflow.read_google_doc', return_value="Resume content"):
+        with patch('resume_agent.services.resume_workflow.read_resume_file', return_value="Resume content"):
             resume_text, error = service.load_resume(resume_doc_id="custom_doc_123")
             
             assert resume_text == "Resume content"
@@ -79,7 +79,7 @@ class TestWorkflowService:
         """Test loading resume with default doc ID"""
         service = ResumeWorkflowService(llm_service=mock_llm_service, google_services=mock_google_services)
         
-        with patch('resume_agent.services.resume_workflow.read_google_doc', return_value="Resume content"):
+        with patch('resume_agent.services.resume_workflow.read_resume_file', return_value="Resume content"):
             with patch('resume_agent.services.resume_workflow.RESUME_DOC_ID', "default_doc_123"):
                 resume_text, error = service.load_resume()
                 
@@ -100,13 +100,13 @@ class TestWorkflowService:
         )
         
         # Mock the workflow steps
-        with patch('resume_agent.services.resume_workflow.read_google_doc', return_value=sample_resume_text):
+        with patch('resume_agent.services.resume_workflow.read_resume_file', return_value=sample_resume_text):
             with patch('resume_agent.services.resume_workflow.RESUME_DOC_ID', "default_doc_123"):  # Mock default for fallback
                 with patch('resume_agent.services.resume_workflow.get_subfolder_id_for_job', return_value="subfolder_123"):
                     with patch('resume_agent.services.resume_workflow.copy_doc_to_folder', return_value="new_doc_123"):
                         with patch('resume_agent.services.resume_workflow.write_to_google_doc'):
                             with patch('resume_agent.services.resume_workflow.generate_diff_markdown', return_value=Path("/tmp/diff.md")):
-                                with patch('resume_agent.services.resume_workflow.add_application', return_value=1):
+                                with patch('resume_agent.services.resume_workflow.add_or_update_application', return_value=1):
                                     # Execute workflow
                                     result = TailorResumeResult(current_step=WorkflowStep.LOADING_RESUME)
                                     
@@ -135,7 +135,7 @@ class TestWorkflowService:
                 jd_text=sample_jd_text
             )
             
-            with patch('resume_agent.services.resume_workflow.read_google_doc', return_value=sample_resume_text):
+            with patch('resume_agent.services.resume_workflow.read_resume_file', return_value=sample_resume_text):
                 with patch('resume_agent.utils.cache_tailoring.TailoringCache') as mock_cache_class:
                     mock_cache = Mock()
                     mock_cache.find_similar_patterns.return_value = []
@@ -177,32 +177,39 @@ class TestWorkflowService:
             mock_validation.is_valid = True
             mock_validation.issues = []
             
-            with patch('resume_agent.services.resume_workflow.read_google_doc', return_value=sample_resume_text):
-                with patch('resume_agent.agents.resume_validator.validate_resume_quality', return_value=mock_validation):
-                    with patch('resume_agent.agents.resume_validator.extract_jd_requirements', return_value={"required_skills": ["Python"]}):
-                        with patch('resume_agent.utils.resume_parser.parse_resume_sections') as mock_parse:
-                            # Mock section parsing
-                            from resume_agent.utils.resume_parser import ResumeSection
-                            mock_parse.return_value = {
-                                "Experience": ResumeSection("Experience", "Original", 0, 100, 2),
-                                "Skills": ResumeSection("Skills", "Original", 100, 200, 2)
-                            }
-                            
-                            with patch('resume_agent.utils.cache_tailoring.TailoringCache') as mock_cache_class:
-                                mock_cache = Mock()
-                                mock_cache_class.return_value = mock_cache
+            with patch('resume_agent.services.resume_workflow.read_resume_file', return_value=sample_resume_text):
+                with patch('resume_agent.services.resume_workflow.build_review_bundle', return_value={"summary": "ok"}):
+                    with patch('resume_agent.agents.resume_validator.validate_resume_quality', return_value=mock_validation):
+                        with patch('resume_agent.agents.resume_validator.extract_jd_requirements', return_value={"required_skills": ["Python"]}):
+                            with patch('resume_agent.utils.resume_parser.parse_resume_sections') as mock_parse:
+                                # Mock section parsing
+                                from resume_agent.utils.resume_parser import ResumeSection
+                                mock_parse.side_effect = [
+                                    {
+                                        "Experience": ResumeSection("Experience", "Original", 0, 100, 2),
+                                        "Skills": ResumeSection("Skills", "Original", 100, 200, 2)
+                                    },
+                                    {
+                                        "Experience": ResumeSection("Experience", "Original updated", 0, 100, 2),
+                                        "Skills": ResumeSection("Skills", "Original", 100, 200, 2)
+                                    },
+                                ]
                                 
-                                result = TailorResumeResult(
-                                    current_step=WorkflowStep.VALIDATING_RESUME,
-                                    resume_text=sample_resume_text,
-                                    tailored_resume=sample_resume_text + "\n\nUpdated"
-                                )
-                                
-                                # Execute validation step (should save pattern)
-                                result = service.execute_workflow_step(request, WorkflowStep.VALIDATING_RESUME, result)
-                                
-                                # Verify pattern was saved
-                                mock_cache.save_pattern.assert_called_once()
+                                with patch('resume_agent.utils.cache_tailoring.TailoringCache') as mock_cache_class:
+                                    mock_cache = Mock()
+                                    mock_cache_class.return_value = mock_cache
+                                    
+                                    result = TailorResumeResult(
+                                        current_step=WorkflowStep.VALIDATING_RESUME,
+                                        resume_text=sample_resume_text,
+                                        tailored_resume=sample_resume_text + "\n\nUpdated"
+                                    )
+                                    
+                                    # Execute validation step (should save pattern)
+                                    result = service.execute_workflow_step(request, WorkflowStep.VALIDATING_RESUME, result)
+                                    
+                                    # Verify pattern was saved
+                                    mock_cache.save_pattern.assert_called_once()
         finally:
             if os.path.exists(temp_cache_file):
                 os.unlink(temp_cache_file)
@@ -218,7 +225,7 @@ class TestWorkflowService:
             sections_to_tailor=["Experience", "Skills"]
         )
         
-        with patch('resume_agent.services.resume_workflow.read_google_doc', return_value=sample_resume_text):
+        with patch('resume_agent.services.resume_workflow.read_resume_file', return_value=sample_resume_text):
             with patch('resume_agent.utils.resume_parser.parse_resume_sections') as mock_parse:
                 from resume_agent.utils.resume_parser import ResumeSection
                 mock_parse.return_value = {
@@ -244,7 +251,7 @@ class TestWorkflowService:
             refinement_feedback="Make it more technical and add more AWS details"
         )
         
-        with patch('resume_agent.services.resume_workflow.read_google_doc', return_value=sample_resume_text):
+        with patch('resume_agent.services.resume_workflow.read_resume_file', return_value=sample_resume_text):
             result = TailorResumeResult(current_step=WorkflowStep.TAILORING_RESUME, resume_text=sample_resume_text)
             result = service.execute_workflow_step(request, WorkflowStep.TAILORING_RESUME, result)
             

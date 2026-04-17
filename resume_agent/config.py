@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     langchain_api_key: Optional[str] = Field(None, validation_alias=AliasChoices('LANGCHAIN_API_KEY'))
     
     # LLM Provider Configuration
-    llm_provider: str = Field("ollama", validation_alias=AliasChoices('LLM_PROVIDER'))  # ollama, groq, openai
+    llm_provider: str = Field("ollama", validation_alias=AliasChoices('LLM_PROVIDER'))  # ollama, groq, openai, anthropic
     
     # Ollama settings
     ollama_model: str = Field("llama2", validation_alias=AliasChoices('OLLAMA_MODEL'))
@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     openai_temperature: float = Field(0.3, validation_alias=AliasChoices('OPENAI_TEMPERATURE'))
     openai_top_p: float = Field(0.9, validation_alias=AliasChoices('OPENAI_TOP_P'))
     openai_max_tokens: int = Field(4000, validation_alias=AliasChoices('OPENAI_MAX_TOKENS'))
+
+    # Anthropic settings
+    anthropic_api_key: Optional[str] = Field(None, validation_alias=AliasChoices('ANTHROPIC_API_KEY'))
+    anthropic_model: str = Field("claude-sonnet-4-20250514", validation_alias=AliasChoices('ANTHROPIC_MODEL'))
+    anthropic_temperature: float = Field(0.3, validation_alias=AliasChoices('ANTHROPIC_TEMPERATURE'))
+    anthropic_max_tokens: int = Field(4096, validation_alias=AliasChoices('ANTHROPIC_MAX_TOKENS'))
     
     application_db_path: Optional[str] = Field(None, validation_alias=AliasChoices('APPLICATION_DB_PATH'))
     memory_file: Optional[str] = Field(None, validation_alias=AliasChoices('MEMORY_FILE'))
@@ -218,6 +224,10 @@ except (PermissionError, OSError, FileNotFoundError) as e:
         openai_temperature: float = Field(0.3, validation_alias=AliasChoices('OPENAI_TEMPERATURE'))
         openai_top_p: float = Field(0.9, validation_alias=AliasChoices('OPENAI_TOP_P'))
         openai_max_tokens: int = Field(4000, validation_alias=AliasChoices('OPENAI_MAX_TOKENS'))
+        anthropic_api_key: Optional[str] = Field(None, validation_alias=AliasChoices('ANTHROPIC_API_KEY'))
+        anthropic_model: str = Field("claude-sonnet-4-20250514", validation_alias=AliasChoices('ANTHROPIC_MODEL'))
+        anthropic_temperature: float = Field(0.3, validation_alias=AliasChoices('ANTHROPIC_TEMPERATURE'))
+        anthropic_max_tokens: int = Field(4096, validation_alias=AliasChoices('ANTHROPIC_MAX_TOKENS'))
         application_db_path: Optional[str] = Field(None, validation_alias=AliasChoices('APPLICATION_DB_PATH'))
         memory_file: Optional[str] = Field(None, validation_alias=AliasChoices('MEMORY_FILE'))
         log_file: Optional[str] = Field(None, validation_alias=AliasChoices('LOG_FILE'))

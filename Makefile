@@ -2,6 +2,8 @@
 
 .PHONY: help install test lint format clean setup ui api frontend dev ui-streamlit ui-dev
 
+PYTHON ?= $(shell if [ -x "./.venv/bin/python" ]; then printf '%s' "./.venv/bin/python"; else command -v python; fi)
+
 help:
 	@echo "Available commands:"
 	@echo "  make install    - Install package and dependencies"
@@ -17,8 +19,8 @@ help:
 	@echo "  make setup      - Run setup script"
 
 install:
-	pip install -r requirements.txt
-	pip install -e .
+	$(PYTHON) -m pip install -r requirements.txt
+	$(PYTHON) -m pip install -e .
 
 test:
 	pytest -v
@@ -36,7 +38,7 @@ test-frontend-playwright:
 	@echo "Running React UI Playwright tests (requires UI_TESTS=true)"
 	@echo ""
 	@echo "⚠️  IMPORTANT: Both servers must be running before tests:"
-	@echo "   1. Start backend:  make api (or: uvicorn api.main:app --reload --port 8000)"
+	@echo "   1. Start backend:  make api (or: python -m uvicorn api.main:app --reload --port 8000)"
 	@echo "   2. Start frontend: make frontend (or: cd frontend && npm run dev)"
 	@echo "   3. Then run: UI_TESTS=true pytest tests/test_frontend_playwright.py -v"
 	@echo ""
@@ -94,7 +96,7 @@ clean:
 	rm -rf build/ dist/ .pytest_cache/ .mypy_cache/ 2>/dev/null || true
 
 setup:
-	python scripts/setup_env.py
+	$(PYTHON) scripts/setup_env.py
 
 ui: ## Run FastAPI + React UI (new)
 	@echo "Starting Resume Agent (FastAPI + React)..."
@@ -121,7 +123,7 @@ ui: ## Run FastAPI + React UI (new)
 		set -e; \
 		trap "kill 0" EXIT; \
 		echo "🚀 Starting backend server..." && \
-		uvicorn api.main:app --reload --host 0.0.0.0 --port 8000 > /tmp/resume-agent-backend.log 2>&1 & \
+		$(PYTHON) -m uvicorn api.main:app --reload --host 0.0.0.0 --port 8000 > /tmp/resume-agent-backend.log 2>&1 & \
 		BACKEND_PID=$$!; \
 		echo "   Backend PID: $$BACKEND_PID"; \
 		BACKEND_READY=0; \
@@ -189,10 +191,10 @@ api: ## Run FastAPI backend only
 		echo "⚠️  ERROR: Port 8000 is already in use!"; \
 		echo "   Kill existing process: lsof -ti:8000 | xargs kill -9"; \
 		echo "   Or use: make stop"; \
-		echo "   Or use a different port: uvicorn api.main:app --reload --port 8001"; \
+		echo "   Or use a different port: $(PYTHON) -m uvicorn api.main:app --reload --port 8001"; \
 		exit 1; \
 	fi
-	uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+	$(PYTHON) -m uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 
 frontend: ## Run React frontend only
 	@echo "Starting React frontend on http://localhost:3000..."

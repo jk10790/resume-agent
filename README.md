@@ -15,15 +15,19 @@ An AI-powered resume tailoring and job application assistant that helps you:
 - **Google Docs integration** – Read/write resumes via Google Docs (OAuth or file-based auth)
 - **Application tracking** – SQLite-backed application tracker
 - **Change logging** – Markdown diffs of resume changes
-- **Multiple LLM providers** – Ollama (local), Groq, OpenAI
+- **Multiple LLM providers** – Ollama, Groq, OpenAI, Anthropic (Claude)
+- **Skills** – File-backed prompts in `skills/` ([docs/SKILLS.md](docs/SKILLS.md))
+- **Path B (optional)** – Conversational agent ([docs/AGENT.md](docs/AGENT.md))
 - **Prompt learning** – Improve prompts from user feedback (see [Prompt learning](#prompt-learning) below)
 
 ## Quick Start
 
+**First time?** See [Bootstrap](docs/BOOTSTRAP.md) for step-by-step setup.
+
 ### Prerequisites
 
 - Python 3.8+
-- An LLM provider: **Ollama** (local), **Groq**, or **OpenAI**
+- An LLM provider: **Ollama**, **Groq**, **OpenAI**, or **Anthropic**
 - Google account (Drive + Docs) for resume storage
 - Node.js for the React frontend (if using Web UI)
 
@@ -32,8 +36,8 @@ An AI-powered resume tailoring and job application assistant that helps you:
 ```bash
 git clone <repo-url>
 cd resume-agent
-python3 -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
+python3 -m venv venv   # or: python3 -m venv .venv
+source venv/bin/activate   # or: source .venv/bin/activate   (Windows: venv\Scripts\activate)
 pip install -r requirements.txt
 pip install -e .
 ```
@@ -62,6 +66,20 @@ Run: `ollama serve` and `ollama pull llama2`
 `LLM_PROVIDER=openai`  
 `OPENAI_API_KEY=<your_key>`  
 `OPENAI_MODEL=gpt-4o-mini`
+
+**Anthropic (Claude)**  
+`LLM_PROVIDER=anthropic`  
+`ANTHROPIC_API_KEY=<your_key>`  
+`ANTHROPIC_MODEL=claude-sonnet-4-20250514`
+
+**Model choice**  
+Yes – a more capable model generally follows instructions more reliably (e.g. “replace this word”, “break these sentences”) and can improve resume quality and tailoring. You’re already on Groq’s strongest option (`llama-3.3-70b-versatile`). For even more consistent instruction-following you can switch to OpenAI:
+
+- **OpenAI `gpt-4o`** – Best instruction-following and nuance; higher cost.  
+  In `.env`: `LLM_PROVIDER=openai`, `OPENAI_API_KEY=<key>`, `OPENAI_MODEL=gpt-4o`
+- **OpenAI `gpt-4o-mini`** – Good balance of cost and quality (default if you only set `LLM_PROVIDER=openai`).
+
+So: **better LLM → better understanding and more reliable edits**; the app supports Groq (current) and OpenAI so you can switch via `.env` without code changes.
 
 ### Google API (Web UI – recommended)
 
@@ -126,16 +144,22 @@ python main.py search "company name"
 ### Environment variables
 
 **LLM**  
-- `LLM_PROVIDER` – `ollama` | `groq` | `openai`  
-- Groq: `GROQ_API_KEY`, `GROQ_MODEL` (default: `llama-3.3-70b-versatile`), `GROQ_TEMPERATURE`, `GROQ_TOP_P`, `GROQ_MAX_TOKENS`  
-- Ollama: `OLLAMA_MODEL` (default: `llama2`)  
-- OpenAI: `OPENAI_API_KEY`, `OPENAI_MODEL` (default: `gpt-4o-mini`), `OPENAI_TEMPERATURE`, `OPENAI_TOP_P`, `OPENAI_MAX_TOKENS`
+- `LLM_PROVIDER` – `ollama` | `groq` | `openai` | `anthropic`  
+- Groq: `GROQ_API_KEY`, `GROQ_MODEL`, `GROQ_TEMPERATURE`, `GROQ_TOP_P`, `GROQ_MAX_TOKENS`  
+- Ollama: `OLLAMA_MODEL`  
+- OpenAI: `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_TEMPERATURE`, `OPENAI_TOP_P`, `OPENAI_MAX_TOKENS`  
+- Anthropic: `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_TEMPERATURE`, `ANTHROPIC_MAX_TOKENS`
 
 **Google (optional for Web UI)**  
 - `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`  
 - `GOOGLE_OAUTH_REDIRECT_URI` (default: `http://localhost:8000/api/auth/google/callback`)  
 - `SESSION_SECRET_KEY`  
 - Legacy: `GOOGLE_FOLDER_ID`, `RESUME_DOC_ID`
+
+**Chrome extension**  
+- To use the [Chrome extension](chrome_extension/README.md) (evaluate fit from any job page), add your extension origin to CORS:  
+  `API_CORS_ORIGINS=http://localhost:3000,chrome-extension://YOUR_EXTENSION_ID`  
+  (Get the ID from `chrome://extensions` after loading the unpacked extension.)
 
 **Other**  
 - `APPLICATION_DB_PATH`, `MEMORY_FILE`, `LOG_FILE`  
@@ -180,13 +204,13 @@ resume-agent/
 │   └── routers/            # health, auth, applications, google_drive
 ├── resume_agent/
 │   ├── agents/             # Parser, JD analyzer, fit evaluator, tailor, review, etc.
-│   ├── services/           # LLM, multi-agent workflow, resume workflow
-│   ├── models/             # Pydantic models
-│   ├── prompts/            # Templates, intensity, feedback learner
-│   ├── storage/            # Google Docs/Drive, memory, OAuth
-│   ├── tracking/           # Application tracker
-│   ├── utils/
-│   └── config.py
+│   ├── agent/              # Path B: MCP skills server (optional)
+│   ├── skills/             # Loader for file-backed prompts
+│   ├── services/            # LLM, workflow
+│   ├── prompts/            # Templates (thin wrapper over skills), intensity
+│   ├── storage/, tracking/, utils/, config.py
+├── skills/                 # Manifest + SKILL.md per skill
+├── docs/                   # BOOTSTRAP.md, use_case.md, SKILLS.md, AGENT.md
 ├── frontend/                # React (Vite) UI
 ├── tests/
 ├── main.py                 # CLI entry
@@ -204,8 +228,8 @@ resume-agent/
 - *deleted_client* – Remove `token.json` and re-run file-based auth if using legacy flow.
 
 **LLM**  
-- *Missing API key* – Set `GROQ_API_KEY` or `OPENAI_API_KEY` in `.env`.  
-- *Provider not found* – Set `LLM_PROVIDER=groq` (or `ollama` / `openai`).
+- *Missing API key* – Set the key for your provider (`GROQ_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`).  
+- *Provider not found* – Set `LLM_PROVIDER` to `groq`, `ollama`, `openai`, or `anthropic`.
 
 **General**  
 - `.env` must be in project root. Paths in config resolve relative to project root.

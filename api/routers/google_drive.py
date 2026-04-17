@@ -5,7 +5,7 @@ Google Drive and Docs endpoints
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from typing import Optional
 
-from resume_agent.storage.google_drive_utils import list_google_docs, list_google_folders
+from resume_agent.storage.google_drive_utils import list_google_docs, list_google_folders, list_resume_files
 from resume_agent.utils.exceptions import GoogleAPIError
 from resume_agent.utils.logger import logger
 
@@ -13,31 +13,20 @@ router = APIRouter(prefix="/api", tags=["google_drive"])
 
 
 def get_google_services_from_request(request: Request):
-    """
-    Get Google services using session credentials if available.
-    This is a simplified version - the full implementation is in main.py.
-    """
-    from resume_agent.storage.google_docs import get_services
-    
+    """Get Google services from session credentials (sign in with Google in the web app)."""
     session_data = request.session.get("user_data")
     if session_data and session_data.get("google_credentials"):
         try:
             from resume_agent.storage.google_oauth import credentials_from_dict
             creds_dict = session_data["google_credentials"]
             credentials = credentials_from_dict(creds_dict)
-            
             from googleapiclient.discovery import build
             drive_service = build('drive', 'v3', credentials=credentials)
             docs_service = build('docs', 'v1', credentials=credentials)
             return drive_service, docs_service
         except Exception as e:
             logger.warning(f"Failed to use session credentials: {e}")
-    
-    # Fallback to file-based auth
-    try:
-        return get_services()
-    except Exception:
-        return None
+    return None
 
 
 @router.get("/google-docs")
@@ -54,13 +43,12 @@ async def list_google_docs_endpoint(
             return {"docs": [], "error": "Google services not available. Please authenticate with Google."}
         
         drive_service, _ = google_services
-        docs = list_google_docs(
+        docs = list_resume_files(
             drive_service,
             folder_id=folder_id,
             search_query=search,
             max_results=min(max_results, 100)
         )
-        
         return {"docs": docs}
     except GoogleAPIError as e:
         logger.error(f"Google API error listing docs: {e}", exc_info=True)

@@ -28,13 +28,8 @@ async def health_check(deep: bool = Query(False, description="If true, check LLM
     except Exception as e:
         checks["llm"] = f"error: {str(e)[:200]}"
 
-    # Optional: Google services (file-based or env credentials)
-    try:
-        from resume_agent.storage.google_docs import get_services
-        get_services()
-        checks["google"] = "ok"
-    except Exception as e:
-        checks["google"] = f"error: {str(e)[:200]}"
+    # Google: session-only (no file-based check)
+    checks["google"] = "session-only (sign in via web app to use Drive/Docs)"
 
     payload["checks"] = checks
     return payload

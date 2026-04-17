@@ -1,69 +1,49 @@
-"""
-Pytest configuration and fixtures.
-"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
 
 import pytest
-import tempfile
-import shutil
-from pathlib import Path
 
 
 @pytest.fixture(scope="session")
-def temp_base_dir():
-    """Create base temporary directory for all tests"""
-    temp_path = tempfile.mkdtemp()
-    yield Path(temp_path)
-    shutil.rmtree(temp_path)
+def _test_db_path(tmp_path_factory: pytest.TempPathFactory) -> str:
+    db_dir = tmp_path_factory.mktemp("db")
+    return str(Path(db_dir) / "test_applications.db")
 
 
-@pytest.fixture
-def sample_resume():
-    """Sample resume for testing"""
-    from resume_agent.models.resume import Resume
-    return Resume(
-        content="""John Doe
-Software Engineer
+@pytest.fixture(autouse=True, scope="session")
+def _patch_global_db_path(_test_db_path: str):
+    # Patch the module-level DB_PATH used by get_db_connection() so tests don't
+    # mutate the repo's real applications.db.
+    from resume_agent.storage import user_store
 
-Experience:
-- 5 years Python development
-- AWS cloud infrastructure
-- Team leadership""",
-        version="1.0",
-        source="test"
-    )
+    user_store.DB_PATH = _test_db_path
+
+    # Some code paths read this env var directly; keep it consistent.
+    os.environ.setdefault("APPLICATION_DB_PATH", _test_db_path)
 
 
-@pytest.fixture
-def sample_jd():
-    """Sample job description for testing"""
-    from resume_agent.models.resume import JobDescription
-    return JobDescription(
-        title="Senior Software Engineer",
-        company="Tech Corp",
-        content="""Looking for Senior Software Engineer with:
-- 5+ years Python experience
-- AWS cloud experience
-- Leadership skills""",
-        url="http://example.com/job"
-    )
+@pytest.fixture(autouse=True)
+def _clear_sqlite_state():
+    # Clear persisted state between tests for deterministic results.
+    from resume_agent.storage.user_store import get_db_connection
 
-
-@pytest.fixture
-def mock_llm_service():
-    """Mock LLM service for testing"""
-    from unittest.mock import Mock
-    from resume_agent.services.llm_service import LLMService
-    
-    service = Mock(spec=LLMService)
-    service.model = Mock()
-    service.invoke_with_retry = Mock(return_value='{"score": 8, "should_apply": true}')
-    service.invoke_structured = Mock(return_value={
-        "score": 8,
-        "should_apply": True,
-        "matching_areas": ["Python", "AWS"],
-        "missing_areas": [],
-        "recommendations": [],
-        "confidence": 0.9
-    })
-    
-    return service
+    conn = get_db_connection()
+    try:
+        for table in (
+            "users",
+            "user_skill_inventory",
+            "user_quality_reports",
+            "user_metric_inventory",
+            "user_improved_resumes",
+            "cache_entries",
+        ):
+            try:
+                conn.execute(f"DELETE FROM {table}")
+            except Exception:
+                # Some tables (e.g. cache_entries) may not be created until first use.
+                continue
+        conn.commit()
+    finally:
+        conn.close()

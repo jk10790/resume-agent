@@ -8,7 +8,6 @@ from typing import Dict, List, Any, Optional
 from pydantic import ValidationError
 from ..services.llm_service import LLMService
 from ..utils.logger import logger
-from ..storage.user_memory import get_skills
 from ..models.agent_models import ParsedResume, ParsedResumeStructured
 import json
 import re
@@ -20,11 +19,16 @@ class ResumeParserAgent:
     This agent does NOT modify, tailor, or suggest changes.
     """
     
-    def __init__(self, llm_service: LLMService):
+    def __init__(self, llm_service: LLMService, confirmed_skills: Optional[List[str]] = None):
         self.llm_service = llm_service
-        self.confirmed_skills = get_skills()  # User's confirmed skills
+        self.confirmed_skills = list(confirmed_skills or [])
     
-    def parse(self, resume_text: str, use_cache: bool = True) -> ParsedResume:
+    def parse(
+        self,
+        resume_text: str,
+        use_cache: bool = True,
+        source_cache_key: Optional[str] = None,
+    ) -> ParsedResume:
         """
         Parse resume and extract all relevant information in a SINGLE LLM call.
         Uses caching to avoid redundant parsing.
@@ -32,6 +36,7 @@ class ResumeParserAgent:
         Args:
             resume_text: Raw resume text
             use_cache: Whether to use cache (default: True)
+            source_cache_key: Stable source version key, e.g. doc_id + modifiedTime
             
         Returns:
             ParsedResume with structured data
@@ -42,7 +47,10 @@ class ResumeParserAgent:
         if use_cache:
             from ..utils.agent_cache import get_agent_cache
             cache = get_agent_cache()
-            cached_data = cache.get_parsed_resume(resume_text)
+            cached_data = cache.get_parsed_resume(
+                resume_text,
+                source_cache_key=source_cache_key,
+            )
             if cached_data:
                 logger.info("Resume Parser Agent: Using cached parsed resume")
                 parsed_data = cached_data
@@ -50,7 +58,11 @@ class ResumeParserAgent:
                 # Extract everything in ONE structured LLM call
                 parsed_data = self._extract_all_structured(resume_text)
                 # Cache the result
-                cache.set_parsed_resume(resume_text, parsed_data)
+                cache.set_parsed_resume(
+                    resume_text,
+                    parsed_data,
+                    source_cache_key=source_cache_key,
+                )
         else:
             # Extract everything in ONE structured LLM call
             parsed_data = self._extract_all_structured(resume_text)

@@ -1,6 +1,6 @@
 """
 Centralized LLM service with retry logic, caching, and structured output.
-Supports multiple providers: Ollama, Groq, OpenAI
+Supports multiple providers: Ollama, Groq, OpenAI, Anthropic
 """
 
 import json
@@ -13,6 +13,7 @@ from ..utils.logger import logger
 from ..utils.exceptions import LLMError
 from ..models.resume import FitEvaluation
 from .llm_providers import create_provider, LLMProvider
+from ..storage.cache_store import get_cache_store
 
 
 class LLMService:
@@ -29,7 +30,7 @@ class LLMService:
         Initialize LLM service with configurable provider.
         
         Args:
-            provider_type: One of "ollama", "groq", or "openai". If None, uses settings.
+            provider_type: One of "ollama", "groq", "openai", or "anthropic". If None, uses settings.
             model_name: Model name (provider-specific). If None, uses settings defaults.
             cache_size: Cache size for responses
             **provider_kwargs: Additional provider-specific arguments
@@ -77,20 +78,35 @@ class LLMService:
                 max_tokens=provider_kwargs.get("max_tokens", settings.openai_max_tokens)
             )
             self.model_name = model
+
+        elif self.provider_type == "anthropic":
+            api_key = provider_kwargs.get("api_key") or settings.anthropic_api_key
+            model = model_name or settings.anthropic_model
+            self.provider = create_provider(
+                "anthropic",
+                api_key=api_key,
+                model_name=model,
+                temperature=provider_kwargs.get("temperature", settings.anthropic_temperature),
+                max_tokens=provider_kwargs.get("max_tokens", settings.anthropic_max_tokens),
+            )
+            self.model_name = model
+
         else:
             from ..utils.exceptions import ConfigError
             raise ConfigError(
                 f"Unknown provider: {provider_type}",
                 config_key="LLM_PROVIDER",
                 fix_instructions=(
-                    f"1. Set LLM_PROVIDER to one of: ollama, groq, openai\n"
+                    f"1. Set LLM_PROVIDER to one of: ollama, groq, openai, anthropic\n"
                     f"2. Current value: {provider_type}\n"
-                    f"3. Update your .env file with: LLM_PROVIDER=groq (or ollama/openai)"
+                    f"3. Update your .env file with: LLM_PROVIDER=anthropic (or groq/ollama/openai)"
                 )
             )
         
         self.cache: Dict[str, str] = {}
         self.cache_size = cache_size
+        self.cache_store = get_cache_store()
+        self.last_invoke_metadata: Dict[str, Any] = {}
         logger.info(f"Initialized LLM service with provider: {self.provider_type}, model: {self.model_name}")
     
     def _get_cache_key(self, messages: List[BaseMessage]) -> str:
@@ -102,16 +118,43 @@ class LLMService:
         """Get response from cache"""
         if key in self.cache:
             logger.debug("Cache hit", cache_key=key[:8])
+            self.last_invoke_metadata = {
+                "cache_hit": True,
+                "cache_layer": "memory",
+                "provider": self.provider_type,
+                "model": self.model_name,
+            }
             return self.cache[key]
+        persistent = self.cache_store.get("llm_response", key)
+        if persistent and isinstance(persistent.get("response"), str):
+            logger.debug("Persistent cache hit", cache_key=key[:8])
+            self._set_cache(key, persistent["response"], persist=False)
+            self.last_invoke_metadata = {
+                "cache_hit": True,
+                "cache_layer": "persistent",
+                "provider": self.provider_type,
+                "model": self.model_name,
+            }
+            return persistent["response"]
         return None
     
-    def _set_cache(self, key: str, value: str):
+    def _set_cache(self, key: str, value: str, *, persist: bool = True):
         """Store response in cache"""
         if len(self.cache) >= self.cache_size:
             # Remove oldest entry (simple FIFO)
             oldest_key = next(iter(self.cache))
             del self.cache[oldest_key]
         self.cache[key] = value
+        if persist:
+            self.cache_store.put(
+                "llm_response",
+                key,
+                {"response": value},
+                source_hash=key,
+                schema_version="llm_response_v1",
+                provider=self.provider_type,
+                model=self.model_name,
+            )
         logger.debug("Cached response", cache_key=key[:8])
     
     def invoke_with_retry(
@@ -150,6 +193,16 @@ class LLMService:
             cached = self._get_from_cache(cache_key)
             if cached:
                 return cached
+        else:
+            cache_key = None
+
+        self.last_invoke_metadata = {
+            "cache_hit": False,
+            "cache_layer": None,
+            "provider": self.provider_type,
+            "model": self.model_name,
+            "attempts": 0,
+        }
         
         last_error = None
         for attempt in range(max_retries):
@@ -157,6 +210,15 @@ class LLMService:
                 logger.info(f"LLM API call - attempt {attempt + 1}/{max_retries}", provider=self.provider_type, model=self.provider.get_model_name())
                 response = self.provider.invoke(messages)
                 result = response.strip() if hasattr(response, 'strip') else str(response).strip()
+                self.last_invoke_metadata = {
+                    "cache_hit": False,
+                    "cache_layer": None,
+                    "provider": self.provider_type,
+                    "model": self.model_name,
+                    "attempts": attempt + 1,
+                    "response_length": len(result),
+                    "cache_key": cache_key[:8] if cache_key else None,
+                }
                 
                 logger.info("LLM API call successful", provider=self.provider_type, response_length=len(result))
                 
@@ -168,6 +230,15 @@ class LLMService:
                 
             except Exception as e:
                 last_error = e
+                self.last_invoke_metadata = {
+                    "cache_hit": False,
+                    "cache_layer": None,
+                    "provider": self.provider_type,
+                    "model": self.model_name,
+                    "attempts": attempt + 1,
+                    "error": str(e),
+                    "cache_key": cache_key[:8] if cache_key else None,
+                }
                 logger.warning(
                     f"LLM invoke failed (attempt {attempt + 1}/{max_retries})",
                     error=e,

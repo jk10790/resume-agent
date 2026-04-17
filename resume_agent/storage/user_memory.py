@@ -5,6 +5,22 @@ Single backing file; default structure includes user_skills and project_mentions
 """
 
 from .memory import load_memory as _raw_load_memory, save_memory as _raw_save_memory, clear_memory as _clear_memory_file
+from .user_context import get_current_user_id
+from .user_store import (
+    get_user_metric_records,
+    add_user_skill,
+    get_improved_resume_for_user,
+    get_quality_report_for_user,
+    get_user_skills,
+    migrate_legacy_skills_to_user,
+    remove_user_skill,
+    replace_user_metric_records,
+    replace_user_skills,
+    save_improved_resume_for_user,
+    save_quality_report_for_user,
+    update_user_skill,
+)
+from ..utils.metrics import extract_metrics, extract_metrics_from_memory, extract_metrics_from_user_answers
 
 
 def _ensure_structure(memory: dict) -> dict:
@@ -31,21 +47,32 @@ def clear_memory():
     _clear_memory_file()
 
 def has_skill(skill):
-    memory = load_memory()
-    return skill.lower() in [s.lower() for s in memory["user_skills"]]
+    return skill.lower() in [s.lower() for s in get_skills()]
 
 def add_skill(skill):
+    user_id = get_current_user_id()
+    if user_id:
+        add_user_skill(user_id, skill)
+        return
     memory = load_memory()
     if skill not in memory["user_skills"]:
         memory["user_skills"].append(skill)
         save_memory(memory)
 
 def get_skills():
+    user_id = get_current_user_id()
+    if user_id:
+        legacy_skills = load_memory().get("user_skills", [])
+        migrate_legacy_skills_to_user(user_id, legacy_skills)
+        return get_user_skills(user_id)
     return load_memory().get("user_skills", [])
 
 
 def remove_skill(skill: str) -> bool:
     """Remove a skill from the list (case-insensitive)"""
+    user_id = get_current_user_id()
+    if user_id:
+        return remove_user_skill(user_id, skill)
     memory = load_memory()
     user_skills = memory.get("user_skills", [])
     original_count = len(user_skills)
@@ -60,6 +87,9 @@ def remove_skill(skill: str) -> bool:
 
 def update_skill(old_skill: str, new_skill: str) -> bool:
     """Update/rename a skill (case-insensitive match)"""
+    user_id = get_current_user_id()
+    if user_id:
+        return update_user_skill(user_id, old_skill, new_skill)
     memory = load_memory()
     user_skills = memory.get("user_skills", [])
     
@@ -80,6 +110,10 @@ def update_skill(old_skill: str, new_skill: str) -> bool:
 
 def reset_skills():
     """Clear all skills"""
+    user_id = get_current_user_id()
+    if user_id:
+        replace_user_skills(user_id, [])
+        return
     memory = load_memory()
     memory["user_skills"] = []
     save_memory(memory)
@@ -87,6 +121,9 @@ def reset_skills():
 
 def set_skills(skills: list):
     """Replace all skills with a new list (bulk update)"""
+    user_id = get_current_user_id()
+    if user_id:
+        return replace_user_skills(user_id, skills)
     memory = load_memory()
     # Deduplicate and clean
     unique_skills = []
@@ -100,6 +137,58 @@ def set_skills(skills: list):
     memory["user_skills"] = unique_skills
     save_memory(memory)
     return unique_skills
+
+
+def get_verified_metrics():
+    user_id = get_current_user_id()
+    if user_id:
+        return get_user_metric_records(user_id, state="confirmed")
+    memory = load_memory()
+    return [
+        {
+            "raw": metric.raw,
+            "normalized": metric.normalized,
+            "line": metric.line,
+            "category": metric.category,
+            "source": "legacy_memory",
+            "state": "confirmed",
+        }
+        for metric in extract_metrics_from_memory(memory)
+    ]
+
+
+def save_user_metric_answers(user_answers: dict):
+    user_id = get_current_user_id()
+    if user_id:
+        existing_metrics = get_user_metric_records(user_id, state="confirmed")
+        metric_records = [
+            {
+                "raw": metric.raw,
+                "normalized": metric.normalized,
+                "line": metric.line,
+                "category": metric.category,
+                "source": "user_answers",
+            }
+            for metric in extract_metrics_from_user_answers(user_answers)
+        ]
+        merged_records = []
+        seen = set()
+        for record in [*existing_metrics, *metric_records]:
+            normalized = str(record.get("normalized") or "").strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            merged_records.append(record)
+        replace_user_metric_records(user_id, merged_records, state="confirmed", source="user_answers")
+
+    memory = load_memory()
+    memory["user_answers"] = user_answers
+    for key in ("metrics_by_role", "metrics_details", "team_size", "project_scale", "notable_achievements"):
+        value = user_answers.get(key)
+        if isinstance(value, str) and value.strip():
+            memory[key] = value.strip()
+    save_memory(memory)
+    return get_verified_metrics()
 
 
 # ============================================
@@ -116,8 +205,18 @@ def save_improved_resume(resume_text: str, original_doc_id: str = None, score: i
         score: Quality score after improvement
         metadata: Additional metadata (changes made, etc.)
     """
+    user_id = get_current_user_id()
+    if user_id:
+        return save_improved_resume_for_user(
+            user_id,
+            resume_text,
+            original_doc_id=original_doc_id,
+            score=score,
+            metadata=metadata,
+        )
+
     from datetime import datetime
-    
+
     memory = load_memory()
     
     if "improved_resumes" not in memory:
@@ -152,6 +251,9 @@ def get_improved_resume(doc_id: str = None) -> dict:
     Returns:
         Dict with text, score, metadata, etc. or None if not found
     """
+    user_id = get_current_user_id()
+    if user_id:
+        return get_improved_resume_for_user(user_id, doc_id)
     memory = load_memory()
     improved_resumes = memory.get("improved_resumes", {})
     
@@ -198,6 +300,9 @@ def clear_improved_resume(doc_id: str = None):
 
 def save_quality_report(doc_id: str, report: dict):
     """Cache a resume quality report for later use."""
+    user_id = get_current_user_id()
+    if user_id:
+        return save_quality_report_for_user(user_id, doc_id, report)
     from datetime import datetime
     memory = load_memory()
 
@@ -217,6 +322,9 @@ def save_quality_report(doc_id: str, report: dict):
 
 def get_quality_report(doc_id: str = None) -> dict:
     """Get cached resume quality report."""
+    user_id = get_current_user_id()
+    if user_id:
+        return get_quality_report_for_user(user_id, doc_id)
     memory = load_memory()
     quality_reports = memory.get("quality_reports", {})
     if doc_id:

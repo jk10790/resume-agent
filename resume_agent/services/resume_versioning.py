@@ -35,7 +35,7 @@ class ResumeVersion:
     
     def _generate_version_id(self) -> str:
         """Generate unique version ID"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         return f"v{timestamp}"
     
     def to_dict(self) -> Dict:
@@ -66,11 +66,17 @@ class ResumeVersion:
         
         job = None
         if data.get("job_title"):
+            job_content = (
+                data.get("job_content")
+                or data.get("jd_text")
+                or data.get("job_description")
+                or "[not stored]"
+            )
             job = JobDescription(
                 title=data["job_title"],
                 company=data.get("job_company", ""),
                 url=data.get("job_url"),
-                content=""  # Not stored in version
+                content=job_content,
             )
         
         return cls(
@@ -192,14 +198,14 @@ class ResumeVersionService:
     
     def compare_versions(self, version_id1: str, version_id2: str) -> str:
         """
-        Compare two versions and return diff.
+        Compare two versions and return the saved diff file path.
         
         Args:
             version_id1: First version ID
             version_id2: Second version ID
         
         Returns:
-            Diff markdown string
+            Path to the saved markdown diff file
         """
         v1 = self.versions.get(version_id1)
         v2 = self.versions.get(version_id2)

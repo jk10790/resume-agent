@@ -4,6 +4,7 @@ Strictly responsible for updating/tailoring the resume with all available inform
 This agent ONLY tailors - it does NOT parse, analyze, or validate.
 """
 
+from difflib import SequenceMatcher
 from typing import Optional, Dict, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -11,11 +12,12 @@ if TYPE_CHECKING:
     from ..models.resume import FitEvaluation
 from ..services.llm_service import LLMService
 from ..utils.logger import logger
-from ..storage.user_memory import get_skills
 from ..storage.memory import load_memory
 from ..prompts.templates import get_prompt
 from ..config import settings
 from ..utils.llm_factory import create_llm_service_with_fallback
+from ..utils.resume_document import parse_resume_document
+from ..utils.resume_parser import parse_resume_sections
 
 
 class ResumeTailorAgent:
@@ -24,9 +26,9 @@ class ResumeTailorAgent:
     This agent receives all parsed and analyzed information and updates the resume accordingly.
     """
     
-    def __init__(self, llm_service: LLMService):
+    def __init__(self, llm_service: LLMService, confirmed_skills: Optional[list[str]] = None):
         self.llm_service = llm_service
-        self.confirmed_skills = get_skills()
+        self.confirmed_skills = list(confirmed_skills or [])
         self.critic_llm = create_llm_service_with_fallback(
             fallback=llm_service,
             provider=settings.tailoring_critic_provider,
@@ -54,7 +56,10 @@ class ResumeTailorAgent:
         fit_evaluation: "FitEvaluation",
         ats_score: Optional["ATSScore"] = None,
         intensity: str = "medium",
-        refinement_feedback: Optional[str] = None
+        refinement_feedback: Optional[str] = None,
+        current_draft_text: Optional[str] = None,
+        preserve_sections: Optional[list[str]] = None,
+        protected_entry_texts: Optional[list[str]] = None,
     ) -> str:
         """
         Tailor resume based on all available information.
@@ -67,6 +72,7 @@ class ResumeTailorAgent:
             ats_score: Optional ATSScore from ATSScorerAgent
             intensity: Tailoring intensity ("light", "medium", "heavy")
             refinement_feedback: Optional feedback for refinement
+            preserve_sections: Sections that must remain unchanged
             
         Returns:
             Tailored resume text
@@ -93,7 +99,27 @@ class ResumeTailorAgent:
         
         # Add refinement feedback if provided
         if refinement_feedback:
-            clarifications = f"{clarifications}\n\n⚠️⚠️⚠️ USER FEEDBACK FOR REFINEMENT - FOLLOW THESE INSTRUCTIONS CAREFULLY ⚠️⚠️⚠️\n{refinement_feedback}\n\nPlease apply these changes to the resume. This feedback takes priority over general instructions."
+            clarifications = (
+                f"{clarifications}\n\n⚠️⚠️⚠️ USER FEEDBACK FOR REFINEMENT - FOLLOW THESE INSTRUCTIONS CAREFULLY ⚠️⚠️⚠️\n"
+                f"{refinement_feedback}\n\n"
+                "This feedback takes priority over general instructions. "
+                "You must preserve all core resume sections from the source resume unless the feedback explicitly asks to remove them."
+            )
+        if current_draft_text:
+            clarifications = (
+                f"{clarifications}\n\nCURRENT TAILORED DRAFT TO REFINE:\n"
+                f"{current_draft_text}\n\n"
+                "Use the current tailored draft as the editing baseline, but preserve factual content and missing sections from the original source resume."
+            )
+        normalized_preserve_sections = self._normalize_section_names(preserve_sections or [])
+        if normalized_preserve_sections:
+            clarifications = (
+                f"{clarifications}\n\nNON-NEGOTIABLE SECTION PRESERVATION RULES:\n"
+                + "\n".join(
+                    f"- Preserve the {section} section exactly as it appears in the source resume."
+                    for section in normalized_preserve_sections
+                )
+            )
         
         # Select prompt based on intensity
         if intensity in ["light", "medium", "heavy"]:
@@ -154,9 +180,143 @@ Use this context to make informed tailoring decisions.""")
 
         # Clean output
         result = self._clean_resume_output(draft, analyzed_jd.raw_text)
+        result = self._restore_missing_core_sections(original_resume_text, result)
+        result = self._restore_preserved_sections(
+            original_resume_text,
+            result,
+            normalized_preserve_sections,
+        )
+        result = self._restore_protected_entries(
+            current_draft_text or original_resume_text,
+            result,
+            protected_entry_texts or [],
+        )
 
         logger.info("Resume Tailor Agent: Tailoring complete", result_length=len(result))
         return result
+
+    def refine_single_entry(
+        self,
+        current_resume_text: str,
+        original_resume_text: str,
+        target_entry_text: str,
+        feedback: str,
+        analyzed_jd: "AnalyzedJD",
+        preserve_sections: Optional[list[str]] = None,
+        protected_entry_texts: Optional[list[str]] = None,
+    ) -> Optional[str]:
+        """Refine one specific bullet/paragraph in-place instead of rewriting the whole resume."""
+        target_entry = parse_resume_document(current_resume_text).find_entry_by_text(target_entry_text)
+        if not target_entry:
+            logger.warning("Resume Tailor Agent: Target entry not found for single-entry refinement")
+            return None
+
+        from langchain_core.messages import SystemMessage, HumanMessage
+
+        prompt = SystemMessage(content="""You are a precise resume editor.
+
+Rewrite exactly one targeted resume entry based on the user's feedback.
+
+STRICT RULES:
+1. Return ONLY the rewritten entry text, not the full resume
+2. Preserve factual truth from the original resume
+3. Do not add new employers, titles, skills, dates, metrics, or claims
+4. Keep the same entry type:
+   - if the original starts with a bullet marker, keep a bullet marker
+   - if it is a paragraph, keep it as a paragraph
+5. Keep the rewrite concise and human-sounding
+6. Do not output explanations, labels, or markdown fences
+""")
+
+        human_prompt = HumanMessage(content=f"""Job description context:
+---
+{analyzed_jd.raw_text[:2500]}
+---
+
+Original resume (fact reference):
+---
+{original_resume_text[:3500]}
+---
+
+Current tailored resume:
+---
+{current_resume_text[:4000]}
+---
+
+Target section: {target_entry.section_name}
+Target entry to rewrite:
+{target_entry.text}
+
+User feedback:
+{feedback}
+
+Return only the rewritten entry.""")
+
+        rewritten_entry = self.llm_service.invoke_with_retry([prompt, human_prompt]).strip()
+        rewritten_entry = self._clean_single_entry_output(rewritten_entry)
+        if not rewritten_entry:
+            return None
+
+        updated_resume = current_resume_text.replace(target_entry.text, rewritten_entry, 1)
+        effective_preserve = [
+            section for section in self._normalize_section_names(preserve_sections or [])
+            if section != target_entry.section_name
+        ]
+        protected_entries = [
+            entry_text for entry_text in (protected_entry_texts or [])
+            if (entry_text or "").strip() and (entry_text or "").strip() != target_entry.text.strip()
+        ]
+        updated_resume = self._restore_preserved_sections(
+            original_resume_text,
+            updated_resume,
+            effective_preserve,
+        )
+        return self._restore_protected_entries(
+            current_resume_text,
+            updated_resume,
+            protected_entries,
+        )
+
+    def revert_single_entry(
+        self,
+        current_resume_text: str,
+        original_resume_text: str,
+        target_entry_text: str,
+        preserve_sections: Optional[list[str]] = None,
+        protected_entry_texts: Optional[list[str]] = None,
+    ) -> Optional[str]:
+        """Restore one targeted entry toward its best matching original wording."""
+        current_doc = parse_resume_document(current_resume_text)
+        original_doc = parse_resume_document(original_resume_text)
+        target_entry = current_doc.find_entry_by_text(target_entry_text)
+        if not target_entry:
+            logger.warning("Resume Tailor Agent: Target entry not found for deterministic revert")
+            return None
+
+        replacement_entry = self._find_best_original_entry_match(target_entry, original_doc)
+        if not replacement_entry:
+            logger.warning("Resume Tailor Agent: No original entry match found for deterministic revert")
+            return None
+
+        updated_resume = current_resume_text.replace(target_entry.text, replacement_entry.text, 1)
+        effective_preserve = [
+            section for section in self._normalize_section_names(preserve_sections or [])
+            if section != target_entry.section_name
+        ]
+        protected_entries = [
+            entry_text for entry_text in (protected_entry_texts or [])
+            if (entry_text or "").strip() and (entry_text or "").strip() != target_entry.text.strip()
+        ]
+        updated_resume = self._restore_preserved_sections(
+            original_resume_text,
+            updated_resume,
+            effective_preserve,
+        )
+        return self._restore_protected_entries(
+            current_resume_text,
+            updated_resume,
+            protected_entries,
+        )
     
     def _build_tailoring_context(
         self,
@@ -224,6 +384,188 @@ Use this context to make informed tailoring decisions.""")
                 result = result[:-3]
         
         return result.strip()
+
+    def _restore_missing_core_sections(self, source_resume_text: str, tailored_resume_text: str) -> str:
+        """Restore required sections if a rewrite accidentally dropped them."""
+        source_doc = parse_resume_document(source_resume_text)
+        tailored_doc = parse_resume_document(tailored_resume_text)
+
+        source_sections = {section.name: section for section in source_doc.sections if section.name != "header"}
+        tailored_section_names = {section.name for section in tailored_doc.sections if section.name != "header"}
+        restored_blocks = []
+        for section_name in ("summary", "education", "experience", "skills"):
+            if section_name in source_sections and section_name not in tailored_section_names:
+                section = source_sections[section_name]
+                block_lines = [section.title] if section.title else []
+                block_lines.extend(entry.text for entry in section.entries if entry.text.strip())
+                restored_blocks.append("\n".join(block_lines).strip())
+
+        if restored_blocks:
+            logger.warning(
+                "Resume Tailor Agent: Restored missing core sections after rewrite",
+                restored_sections=[block.splitlines()[0] for block in restored_blocks if block],
+            )
+            return f"{tailored_resume_text.strip()}\n\n" + "\n\n".join(block for block in restored_blocks if block).strip()
+
+        return tailored_resume_text
+
+    def _normalize_section_names(self, section_names: list[str]) -> list[str]:
+        normalized = []
+        for name in section_names:
+            clean = (name or "").strip().lower()
+            if clean and clean not in normalized:
+                normalized.append(clean)
+        return normalized
+
+    def _restore_preserved_sections(
+        self,
+        source_resume_text: str,
+        tailored_resume_text: str,
+        preserve_sections: list[str],
+    ) -> str:
+        """Restore user-preserved sections if a rewrite changed them materially."""
+        if not preserve_sections:
+            return tailored_resume_text
+
+        source_sections = parse_resume_sections(source_resume_text)
+        tailored_sections = parse_resume_sections(tailored_resume_text)
+        source_lines = source_resume_text.splitlines()
+        updated_lines = tailored_resume_text.splitlines()
+        restored = []
+
+        for section_name in sorted(
+            preserve_sections,
+            key=lambda name: tailored_sections.get(name).start_index if tailored_sections.get(name) else 10**9,
+            reverse=True,
+        ):
+            source_section = source_sections.get(section_name)
+            tailored_section = tailored_sections.get(section_name)
+            if not source_section:
+                continue
+
+            source_block = self._render_section_from_lines(source_lines, source_section)
+            tailored_block = self._render_section_from_lines(updated_lines, tailored_section) if tailored_section else ""
+
+            if not tailored_section:
+                updated_lines = self._append_section_lines(updated_lines, source_block.splitlines())
+                restored.append(section_name)
+                continue
+
+            if self._section_changed_materially(source_block, tailored_block):
+                updated_lines = (
+                    updated_lines[:tailored_section.start_index]
+                    + source_block.splitlines()
+                    + updated_lines[tailored_section.end_index:]
+                )
+                restored.append(section_name)
+
+        if restored:
+            logger.warning(
+                "Resume Tailor Agent: Restored preserved sections after refinement",
+                restored_sections=restored,
+            )
+
+        return "\n".join(updated_lines).strip() + ("\n" if tailored_resume_text.endswith("\n") else "")
+
+    def _restore_protected_entries(
+        self,
+        baseline_resume_text: str,
+        tailored_resume_text: str,
+        protected_entry_texts: list[str],
+    ) -> str:
+        """Restore exact baseline entries that the user explicitly locked."""
+        normalized_entries = []
+        for entry_text in protected_entry_texts:
+            clean = (entry_text or "").strip()
+            if clean and clean not in normalized_entries:
+                normalized_entries.append(clean)
+        if not normalized_entries:
+            return tailored_resume_text
+
+        baseline_doc = parse_resume_document(baseline_resume_text)
+        updated_resume = tailored_resume_text
+        restored_entries = []
+
+        for protected_text in normalized_entries:
+            if protected_text in updated_resume:
+                continue
+            baseline_entry = baseline_doc.find_entry_by_text(protected_text)
+            if not baseline_entry:
+                continue
+            updated_doc = parse_resume_document(updated_resume)
+            replacement_target = self._find_best_entry_match(baseline_entry, updated_doc)
+            if not replacement_target or replacement_target.text.strip() == protected_text:
+                continue
+            updated_resume = updated_resume.replace(replacement_target.text, protected_text, 1)
+            restored_entries.append(protected_text[:80])
+
+        if restored_entries:
+            logger.warning(
+                "Resume Tailor Agent: Restored protected entries after rewrite",
+                restored_entries=restored_entries,
+            )
+        return updated_resume
+
+    def _render_section_from_lines(self, lines: list[str], section) -> str:
+        if not section:
+            return ""
+        return "\n".join(lines[section.start_index:section.end_index]).strip()
+
+    def _append_section_lines(self, resume_lines: list[str], section_lines: list[str]) -> list[str]:
+        if not section_lines:
+            return resume_lines
+        base_lines = list(resume_lines)
+        if base_lines and base_lines[-1].strip():
+            base_lines.append("")
+        return base_lines + section_lines
+
+    def _section_changed_materially(self, source_block: str, tailored_block: str) -> bool:
+        source_normalized = " ".join(source_block.split())
+        tailored_normalized = " ".join(tailored_block.split())
+        if source_normalized == tailored_normalized:
+            return False
+        similarity = SequenceMatcher(None, source_normalized, tailored_normalized).ratio()
+        return similarity < 0.995
+
+    def _find_best_entry_match(self, reference_entry, document) -> Optional[Any]:
+        candidates = [
+            entry for entry in document.iter_entries()
+            if entry.section_name == reference_entry.section_name
+        ]
+        if not candidates:
+            candidates = list(document.iter_entries())
+        if not candidates:
+            return None
+
+        def score(entry) -> tuple[float, int]:
+            ratio = SequenceMatcher(None, reference_entry.text.strip(), entry.text.strip()).ratio()
+            kind_penalty = 0 if entry.kind == reference_entry.kind else 1
+            return (ratio, -kind_penalty)
+
+        best_entry = max(candidates, key=score)
+        best_ratio = SequenceMatcher(None, reference_entry.text.strip(), best_entry.text.strip()).ratio()
+        if best_ratio < 0.2:
+            return None
+        return best_entry
+
+    def _find_best_original_entry_match(self, current_entry, original_doc) -> Optional[Any]:
+        exact_match = original_doc.find_entry_by_text(current_entry.text)
+        if exact_match:
+            return exact_match
+        return self._find_best_entry_match(current_entry, original_doc)
+
+    def _clean_single_entry_output(self, text: str) -> str:
+        cleaned = (text or "").strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            cleaned = "\n".join(lines).strip()
+        cleaned = cleaned.removeprefix("Rewritten entry:").strip()
+        cleaned = cleaned.removeprefix("Revised entry:").strip()
+        return cleaned
 
     def _critique_tailoring(
         self,

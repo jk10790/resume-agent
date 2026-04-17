@@ -1,176 +1,185 @@
-"""
-Caching layer for agent outputs.
-Caches parsed resumes and analyzed JDs to avoid redundant LLM calls.
-"""
+"""SQLite-backed cache for parsed resumes, analyzed JDs, and tailored outputs."""
 
-import json
+from __future__ import annotations
+
 import hashlib
-from typing import Optional, Dict, Any
-from pathlib import Path
-from ..config import settings
+from typing import Any, Dict, List, Optional
+
+from ..storage.cache_store import get_cache_store
 from ..utils.logger import logger
 
 
 class AgentCache:
-    """Cache for agent outputs (parsed resumes, analyzed JDs)"""
-    
+    """Durable cache for workflow artifacts."""
+
+    PARSED_RESUME_NAMESPACE = "parsed_resume"
+    ANALYZED_JD_NAMESPACE = "analyzed_jd"
+    TAILORED_RESUME_NAMESPACE = "tailored_resume"
+
     def __init__(self, cache_dir: Optional[str] = None):
-        """
-        Initialize agent cache.
-        
-        Args:
-            cache_dir: Directory for cache files (defaults to project root / .agent_cache)
-        """
-        if cache_dir is None:
-            PROJECT_ROOT = Path(__file__).parent.parent.parent
-            cache_dir = PROJECT_ROOT / ".agent_cache"
-        
-        self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(exist_ok=True)
-        
-        # Cache files
-        self.resume_cache_file = self.cache_dir / "parsed_resumes.json"
-        self.jd_cache_file = self.cache_dir / "analyzed_jds.json"
-        
-        # In-memory cache
-        self._resume_cache: Dict[str, Dict] = {}
-        self._jd_cache: Dict[str, Dict] = {}
-        
-        self._load_cache()
-    
-    def _load_cache(self):
-        """Load cache from disk"""
-        try:
-            if self.resume_cache_file.exists():
-                with open(self.resume_cache_file, 'r') as f:
-                    self._resume_cache = json.load(f)
-                logger.debug(f"Loaded {len(self._resume_cache)} parsed resumes from cache")
-            
-            if self.jd_cache_file.exists():
-                with open(self.jd_cache_file, 'r') as f:
-                    self._jd_cache = json.load(f)
-                logger.debug(f"Loaded {len(self._jd_cache)} analyzed JDs from cache")
-        except Exception as e:
-            logger.warning(f"Failed to load agent cache: {e}")
-            self._resume_cache = {}
-            self._jd_cache = {}
-    
-    def _save_cache(self):
-        """Save cache to disk"""
-        try:
-            with open(self.resume_cache_file, 'w') as f:
-                json.dump(self._resume_cache, f, indent=2)
-            with open(self.jd_cache_file, 'w') as f:
-                json.dump(self._jd_cache, f, indent=2)
-        except Exception as e:
-            logger.warning(f"Failed to save agent cache: {e}")
-    
+        # `cache_dir` is kept for backward compatibility; storage is now SQLite-backed.
+        self.cache_store = get_cache_store()
+        self.cache_dir = cache_dir
+
     def _hash_resume(self, resume_text: str) -> str:
-        """Generate hash for resume text"""
         return hashlib.sha256(resume_text.encode()).hexdigest()[:16]
-    
+
+    def _parsed_resume_cache_key(
+        self,
+        resume_text: str,
+        source_cache_key: Optional[str] = None,
+    ) -> str:
+        if source_cache_key:
+            return f"source:{hashlib.sha256(source_cache_key.encode()).hexdigest()[:24]}"
+        return f"text:{self._hash_resume(resume_text)}"
+
     def _hash_jd(self, jd_text: str) -> str:
-        """Generate hash for JD text"""
         return hashlib.sha256(jd_text.encode()).hexdigest()[:16]
-    
-    def get_parsed_resume(self, resume_text: str) -> Optional[Dict[str, Any]]:
-        """
-        Get cached parsed resume.
-        
-        Args:
-            resume_text: Resume text to look up
-            
-        Returns:
-            Cached parsed resume data or None
-        """
-        cache_key = self._hash_resume(resume_text)
-        cached = self._resume_cache.get(cache_key)
-        
+
+    def get_parsed_resume(
+        self,
+        resume_text: str,
+        source_cache_key: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        cache_key = self._parsed_resume_cache_key(resume_text, source_cache_key)
+        cached = self.cache_store.get(self.PARSED_RESUME_NAMESPACE, cache_key)
         if cached:
             logger.info("Cache hit for parsed resume", cache_key=cache_key)
             return cached.get("data")
-        
         return None
-    
-    def set_parsed_resume(self, resume_text: str, parsed_data: Dict[str, Any]):
-        """
-        Cache parsed resume.
-        
-        Args:
-            resume_text: Resume text
-            parsed_data: Parsed resume data
-        """
-        cache_key = self._hash_resume(resume_text)
-        self._resume_cache[cache_key] = {
-            "data": parsed_data,
-            "resume_hash": cache_key
-        }
-        
-        # Limit cache size (keep last 100)
-        if len(self._resume_cache) > 100:
-            # Remove oldest entries (simple: remove first 20)
-            keys_to_remove = list(self._resume_cache.keys())[:20]
-            for key in keys_to_remove:
-                del self._resume_cache[key]
-        
-        self._save_cache()
+
+    def set_parsed_resume(
+        self,
+        resume_text: str,
+        parsed_data: Dict[str, Any],
+        source_cache_key: Optional[str] = None,
+    ):
+        cache_key = self._parsed_resume_cache_key(resume_text, source_cache_key)
+        resume_hash = self._hash_resume(resume_text)
+        self.cache_store.put(
+            self.PARSED_RESUME_NAMESPACE,
+            cache_key,
+            {
+                "data": parsed_data,
+                "resume_hash": resume_hash,
+                "source_cache_key": source_cache_key,
+            },
+            source_hash=source_cache_key or resume_hash,
+            schema_version="parsed_resume_v2",
+        )
         logger.debug("Cached parsed resume", cache_key=cache_key)
-    
+
     def get_analyzed_jd(self, jd_text: str) -> Optional[Dict[str, Any]]:
-        """
-        Get cached analyzed JD.
-        
-        Args:
-            jd_text: JD text to look up
-            
-        Returns:
-            Cached analyzed JD data or None
-        """
         cache_key = self._hash_jd(jd_text)
-        cached = self._jd_cache.get(cache_key)
-        
+        cached = self.cache_store.get(self.ANALYZED_JD_NAMESPACE, cache_key)
         if cached:
             logger.info("Cache hit for analyzed JD", cache_key=cache_key)
             return cached.get("data")
-        
         return None
-    
+
     def set_analyzed_jd(self, jd_text: str, analyzed_data: Dict[str, Any]):
-        """
-        Cache analyzed JD.
-        
-        Args:
-            jd_text: JD text
-            analyzed_data: Analyzed JD data
-        """
         cache_key = self._hash_jd(jd_text)
-        self._jd_cache[cache_key] = {
-            "data": analyzed_data,
-            "jd_hash": cache_key
-        }
-        
-        # Limit cache size (keep last 100)
-        if len(self._jd_cache) > 100:
-            keys_to_remove = list(self._jd_cache.keys())[:20]
-            for key in keys_to_remove:
-                del self._jd_cache[key]
-        
-        self._save_cache()
+        self.cache_store.put(
+            self.ANALYZED_JD_NAMESPACE,
+            cache_key,
+            {"data": analyzed_data, "jd_hash": cache_key},
+            source_hash=cache_key,
+            schema_version="analyzed_jd_v1",
+        )
         logger.debug("Cached analyzed JD", cache_key=cache_key)
-    
+
+    def _tailoring_cache_key(
+        self,
+        resume_text: str,
+        jd_text: str,
+        intensity: str,
+        refinement_feedback: Optional[str],
+        sections_to_tailor: Optional[List[str]],
+        current_draft_text: Optional[str] = None,
+        target_entry_text: Optional[str] = None,
+        protected_entry_texts: Optional[List[str]] = None,
+        revert_target_entry: bool = False,
+    ) -> str:
+        rh = self._hash_resume(resume_text)
+        jh = self._hash_jd(jd_text)
+        ref = (refinement_feedback or "").strip()
+        ref_h = hashlib.sha256(ref.encode()).hexdigest()[:12]
+        draft = (current_draft_text or "").strip()
+        draft_h = hashlib.sha256(draft.encode()).hexdigest()[:12]
+        target = (target_entry_text or "").strip()
+        target_h = hashlib.sha256(target.encode()).hexdigest()[:12]
+        protected = "||".join(sorted((entry or "").strip() for entry in (protected_entry_texts or []) if (entry or "").strip()))
+        protected_h = hashlib.sha256(protected.encode()).hexdigest()[:12]
+        if sections_to_tailor is None or len(sections_to_tailor) == 0:
+            sections_key = "full"
+        else:
+            sections_key = ",".join(sorted(sections_to_tailor))
+        intensity_n = (intensity or "medium").lower()
+        revert_key = "revert" if revert_target_entry else "normal"
+        return f"{rh}_{jh}_{intensity_n}_{ref_h}_{draft_h}_{target_h}_{protected_h}_{sections_key}_{revert_key}"
+
+    def get_tailored_result(
+        self,
+        resume_text: str,
+        jd_text: str,
+        intensity: Optional[str] = None,
+        refinement_feedback: Optional[str] = None,
+        sections_to_tailor: Optional[List[str]] = None,
+        current_draft_text: Optional[str] = None,
+        target_entry_text: Optional[str] = None,
+        protected_entry_texts: Optional[List[str]] = None,
+        revert_target_entry: bool = False,
+    ) -> Optional[str]:
+        key = self._tailoring_cache_key(
+            resume_text, jd_text, intensity or "medium", refinement_feedback, sections_to_tailor, current_draft_text, target_entry_text, protected_entry_texts, revert_target_entry
+        )
+        entry = self.cache_store.get(self.TAILORED_RESUME_NAMESPACE, key)
+        if entry and isinstance(entry.get("tailored_text"), str):
+            logger.info("Cache hit for tailored resume", cache_key=key[:24])
+            return entry["tailored_text"]
+        return None
+
+    def set_tailored_result(
+        self,
+        resume_text: str,
+        jd_text: str,
+        tailored_text: str,
+        intensity: Optional[str] = None,
+        refinement_feedback: Optional[str] = None,
+        sections_to_tailor: Optional[List[str]] = None,
+        current_draft_text: Optional[str] = None,
+        target_entry_text: Optional[str] = None,
+        protected_entry_texts: Optional[List[str]] = None,
+        revert_target_entry: bool = False,
+    ) -> None:
+        key = self._tailoring_cache_key(
+            resume_text, jd_text, intensity or "medium", refinement_feedback, sections_to_tailor, current_draft_text, target_entry_text, protected_entry_texts, revert_target_entry
+        )
+        self.cache_store.put(
+            self.TAILORED_RESUME_NAMESPACE,
+            key,
+            {
+                "tailored_text": tailored_text,
+                "resume_hash": self._hash_resume(resume_text),
+                "jd_hash": self._hash_jd(jd_text),
+            },
+            source_hash=f"{self._hash_resume(resume_text)}:{self._hash_jd(jd_text)}",
+            schema_version="tailored_resume_v1",
+            policy_version=(intensity or "medium").lower(),
+        )
+        logger.debug("Cached tailored resume", cache_key=key[:24])
+
     def clear_cache(self):
-        """Clear all caches"""
-        self._resume_cache = {}
-        self._jd_cache = {}
-        self._save_cache()
+        self.cache_store.delete_namespace(self.PARSED_RESUME_NAMESPACE)
+        self.cache_store.delete_namespace(self.ANALYZED_JD_NAMESPACE)
+        self.cache_store.delete_namespace(self.TAILORED_RESUME_NAMESPACE)
         logger.info("Agent cache cleared")
 
 
-# Global cache instance
 _agent_cache: Optional[AgentCache] = None
 
+
 def get_agent_cache() -> AgentCache:
-    """Get global agent cache instance"""
     global _agent_cache
     if _agent_cache is None:
         _agent_cache = AgentCache()

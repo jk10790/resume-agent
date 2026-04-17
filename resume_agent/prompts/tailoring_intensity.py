@@ -1,12 +1,29 @@
 """
 Tailoring Intensity Prompts
 Different prompt versions for light, medium, and heavy tailoring.
+Uses skills loader when available; falls back to in-code definitions.
 """
 
 from langchain_core.prompts import ChatPromptTemplate
 
 
-RESUME_TAILORING_LIGHT = ChatPromptTemplate.from_messages([
+def _intensity_from_skill(skill_id: str):
+    """Build ChatPromptTemplate from skills loader if available."""
+    try:
+        from ..skills.loader import load_instruction
+        parsed = load_instruction(skill_id)
+        if not parsed or not (parsed.get("system") or parsed.get("human_template")):
+            return None
+        return ChatPromptTemplate.from_messages([
+            ("system", parsed.get("system", "")),
+            ("human", parsed.get("human_template", "")),
+        ])
+    except Exception:
+        return None
+
+
+# In-code fallbacks (used when skills loader unavailable or missing files)
+_RESUME_TAILORING_LIGHT_FALLBACK = ChatPromptTemplate.from_messages([
     ("system", """You are a professional resume writer. Your task is to make MINIMAL, targeted improvements to a resume for a specific job.
 
 LIGHT TAILORING GUIDELINES:
@@ -42,8 +59,7 @@ Supplemental Clarifications:
 Make minimal, targeted improvements. Preserve the original structure and content as much as possible.""")
 ])
 
-
-RESUME_TAILORING_MEDIUM = ChatPromptTemplate.from_messages([
+_RESUME_TAILORING_MEDIUM_FALLBACK = ChatPromptTemplate.from_messages([
     ("system", """You are a professional resume writer. Your task is to MODERATELY tailor a resume for a specific job.
 
 MEDIUM TAILORING GUIDELINES:
@@ -79,8 +95,7 @@ Supplemental Clarifications:
 Moderately tailor the resume to better match the job description while preserving authenticity.""")
 ])
 
-
-RESUME_TAILORING_HEAVY = ChatPromptTemplate.from_messages([
+_RESUME_TAILORING_HEAVY_FALLBACK = ChatPromptTemplate.from_messages([
     ("system", """You are a professional resume writer. Your task is to COMPREHENSIVELY tailor a resume for a specific job.
 
 HEAVY TAILORING GUIDELINES:
@@ -115,3 +130,8 @@ Supplemental Clarifications:
 
 Comprehensively tailor the resume to maximize alignment with the job description while maintaining authenticity.""")
 ])
+
+# Public API: use skill from loader when available, else fallback
+RESUME_TAILORING_LIGHT = _intensity_from_skill("tailor_resume_light") or _RESUME_TAILORING_LIGHT_FALLBACK
+RESUME_TAILORING_MEDIUM = _intensity_from_skill("tailor_resume_medium") or _RESUME_TAILORING_MEDIUM_FALLBACK
+RESUME_TAILORING_HEAVY = _intensity_from_skill("tailor_resume_heavy") or _RESUME_TAILORING_HEAVY_FALLBACK

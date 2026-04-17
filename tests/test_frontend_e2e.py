@@ -184,7 +184,7 @@ class TestTailorResumeComponent:
     def test_page_loads(self, page, frontend_server):
         """Test that the page loads successfully"""
         page.goto(f"{frontend_server}")
-        expect(page).to_have_title(containing="Resume Agent"))
+        expect(page).to_have_title(containing="Resume Agent")
     
     def test_form_fields_exist(self, page, frontend_server):
         """Test that all form fields are present"""

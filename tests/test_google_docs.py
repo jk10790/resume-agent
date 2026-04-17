@@ -1,5 +1,7 @@
 # test_google_docs.py
+# Google Drive/Docs tests require session auth (web app). These tests skip if get_services() raises.
 
+import pytest
 from datetime import datetime
 from resume_agent.config import GOOGLE_FOLDER_ID, RESUME_DOC_ID
 from resume_agent.storage.google_docs import (
@@ -12,7 +14,10 @@ from resume_agent.storage.google_docs import (
 )
 
 def test_google_docs():
-    drive_service, docs_service = get_services()
+    try:
+        drive_service, docs_service = get_services()
+    except Exception as e:
+        pytest.skip(f"Google is session-only: {e}. Use the web app.")
     parent_folder_id = GOOGLE_FOLDER_ID
     master_doc_id = RESUME_DOC_ID
 
@@ -57,7 +62,7 @@ def test_google_docs():
 
     # 6. Overwrite the copy with test content
     test_text = f"Tailored resume test generated on {today}.\n\n[Insert tailored content here...]"
-    write_to_google_doc(docs_service, new_doc_id, test_text)
+    write_to_google_doc(new_doc_id, test_text, docs_service=docs_service)
     print("✅ Wrote sample text to new doc.")
 
 if __name__ == "__main__":

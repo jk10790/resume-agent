@@ -1,7 +1,6 @@
 from langchain_core.messages import SystemMessage, HumanMessage
 from typing import Optional
 from ..storage.memory import load_memory
-from ..storage.user_memory import get_skills
 from ..prompts.templates import get_prompt
 from ..services.llm_service import LLMService
 from ..config import settings
@@ -10,7 +9,7 @@ from ..utils.logger import logger
 # Use prompt versioning (can be configured via env var)
 PROMPT_VERSION = getattr(settings, 'resume_tailoring_prompt_version', 'latest')
 
-def tailor_resume(llm_service, resume_text, jd_text, prompt_version: Optional[str] = None, intensity: str = "medium", refinement_feedback: Optional[str] = None):
+def tailor_resume(llm_service, resume_text, jd_text, prompt_version: Optional[str] = None, intensity: str = "medium", refinement_feedback: Optional[str] = None, confirmed_skills: Optional[list[str]] = None):
     """
     Tailor resume for a job using LLM service.
     
@@ -28,7 +27,7 @@ def tailor_resume(llm_service, resume_text, jd_text, prompt_version: Optional[st
     clarifications = "\n".join(clarification_lines) if clarification_lines else "None"
     
     # Add user's confirmed skills to clarifications
-    user_skills = get_skills()
+    user_skills = list(confirmed_skills or [])
     if user_skills:
         skills_list = ", ".join(user_skills)
         clarifications = f"{clarifications}\n\n✅ USER CONFIRMED SKILLS (you can add these even if not in original resume):\n{skills_list}\n\n⚠️ CRITICAL: ONLY use skills from this list or skills already present in the original resume. DO NOT add skills that are not in this list and not in the original resume."
@@ -200,7 +199,8 @@ def tailor_resume_for_job(
     jd_text: str, 
     llm_service: Optional[LLMService] = None,
     intensity: str = "medium",
-    refinement_feedback: Optional[str] = None
+    refinement_feedback: Optional[str] = None,
+    confirmed_skills: Optional[list[str]] = None,
 ) -> str:
     """
     Tailor resume for a job.
@@ -217,4 +217,11 @@ def tailor_resume_for_job(
     """
     if llm_service is None:
         llm_service = LLMService()  # Uses provider from settings
-    return tailor_resume(llm_service, resume_text, jd_text, intensity=intensity, refinement_feedback=refinement_feedback)
+    return tailor_resume(
+        llm_service,
+        resume_text,
+        jd_text,
+        intensity=intensity,
+        refinement_feedback=refinement_feedback,
+        confirmed_skills=confirmed_skills,
+    )

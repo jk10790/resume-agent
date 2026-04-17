@@ -139,6 +139,17 @@ class ParsedResume(BaseModel):
     sections: Dict[str, str] = Field(default_factory=dict, description="Section name -> content")
 
 
+class UserProfileContext(BaseModel):
+    """Persisted, user-scoped profile context shared across workflow steps."""
+    local_user_id: Optional[int] = Field(None, description="Authenticated local user id")
+    confirmed_skills: List[str] = Field(default_factory=list, description="Confirmed skills from the user profile")
+    detected_skill_records: List[Dict[str, Any]] = Field(default_factory=list, description="Detected skills awaiting confirmation")
+    suggested_skill_records: List[Dict[str, Any]] = Field(default_factory=list, description="Suggested skills derived from resume/role")
+    confirmed_metric_records: List[Dict[str, Any]] = Field(default_factory=list, description="Confirmed metrics/evidence from the user profile")
+    preferred_resume_doc_id: Optional[str] = Field(None, description="Preferred resume Google Doc id")
+    preferred_resume_name: Optional[str] = Field(None, description="Preferred resume display name")
+
+
 # ============================================================================
 # JD Analyzer Agent Models
 # ============================================================================
@@ -313,5 +324,51 @@ class ReviewResult(BaseModel):
     """Result of review agent"""
     reviewed_resume: str = Field(..., description="Final reviewed resume")
     validation: ResumeValidation = Field(..., description="Validation results")
+    review_bundle: Optional["ReviewBundle"] = Field(None, description="Structured multi-surface review bundle")
     changes_made: List[str] = Field(default_factory=list, description="List of changes made during review")
     final_quality_score: float = Field(..., ge=0, le=100, description="Final quality score 0-100")
+
+
+# ============================================================================
+# Review Bundle Models
+# ============================================================================
+
+class ReviewIssue(BaseModel):
+    """Structured issue for a specific review surface"""
+    severity: Severity = Field(..., description="Issue severity level")
+    category: str = Field(..., description="Issue category")
+    message: str = Field(..., description="Issue message")
+    suggestion: Optional[str] = Field(None, description="Suggestion for fixing the issue")
+    evidence: Optional[str] = Field(None, description="Optional supporting evidence")
+
+    model_config = {"use_enum_values": True}
+
+
+class ReviewSection(BaseModel):
+    """One distinct review surface presented to the user"""
+    score: int = Field(..., ge=0, le=100, description="Section score 0-100")
+    verdict: str = Field(..., description="Section verdict")
+    summary: str = Field("", description="Short section summary")
+    issues: List[ReviewIssue] = Field(default_factory=list, description="Issues for this section")
+    recommendations: List[str] = Field(default_factory=list, description="Section recommendations")
+    metrics: Dict[str, Any] = Field(default_factory=dict, description="Structured section metrics")
+
+
+class ReviewOverall(BaseModel):
+    """Overall synthesis of the review bundle"""
+    score: int = Field(..., ge=0, le=100, description="Overall score 0-100")
+    verdict: str = Field(..., description="Overall verdict")
+    summary: str = Field("", description="Summary of overall recommendation")
+    recommendation: str = Field(..., description="Submission recommendation")
+
+
+class ReviewBundle(BaseModel):
+    """Structured review surfaces for authenticity, ATS, job match, and editorial quality"""
+    authenticity: ReviewSection
+    ats_parse: ReviewSection
+    job_match: ReviewSection
+    editorial: ReviewSection
+    overall: ReviewOverall
+
+
+ReviewResult.model_rebuild()

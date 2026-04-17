@@ -261,19 +261,102 @@ class OpenAIProvider(LLMProvider):
         return self.model_name
 
 
+class AnthropicProvider(LLMProvider):
+    """Anthropic Claude API provider"""
+
+    def __init__(
+        self,
+        api_key: str,
+        model_name: str = "claude-sonnet-4-20250514",
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+    ):
+        if not api_key:
+            raise LLMError(
+                "ANTHROPIC_API_KEY is required for Anthropic provider",
+                provider="anthropic",
+                fix_instructions=(
+                    "1. Get your API key from: https://console.anthropic.com\n"
+                    "2. Add to .env: ANTHROPIC_API_KEY=your_key_here\n"
+                    "3. Set LLM_PROVIDER=anthropic"
+                ),
+            )
+        try:
+            import anthropic
+            self._client = anthropic.Anthropic(api_key=api_key)
+        except ImportError:
+            raise LLMError(
+                "anthropic package not installed",
+                provider="anthropic",
+                fix_instructions="Install with: pip install anthropic",
+            )
+        self.api_key = api_key
+        self.model_name = model_name
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        logger.info(f"Initialized Anthropic provider with model: {model_name}")
+
+    def _messages_to_anthropic(self, messages: List[BaseMessage]):
+        """Convert LangChain messages to Anthropic format: system string + messages list (user/assistant only)."""
+        system_parts = []
+        api_messages = []
+        for msg in messages:
+            name = msg.__class__.__name__
+            content = str(msg.content) if hasattr(msg, "content") else ""
+            content = content.strip()
+            if not content:
+                continue
+            if name == "SystemMessage":
+                system_parts.append(content)
+            else:
+                role = "user" if name == "HumanMessage" else "assistant"
+                api_messages.append({"role": role, "content": content})
+        system = "\n\n".join(system_parts) if system_parts else None
+        return system, api_messages
+
+    def invoke(self, messages: List[BaseMessage]) -> str:
+        """Invoke Anthropic Messages API."""
+        system, api_messages = self._messages_to_anthropic(messages)
+        if not api_messages:
+            raise LLMError("At least one user or assistant message required", provider="anthropic")
+        kwargs = {
+            "model": self.model_name,
+            "max_tokens": self.max_tokens,
+            "messages": api_messages,
+            "temperature": self.temperature,
+        }
+        if system:
+            kwargs["system"] = system
+        try:
+            response = self._client.messages.create(**kwargs)
+            if response.content and len(response.content) > 0:
+                block = response.content[0]
+                text = block.text if hasattr(block, "text") else str(block)
+                return text.strip()
+            return ""
+        except Exception as e:
+            raise LLMError(
+                f"Anthropic API failed: {e}",
+                provider="anthropic",
+            )
+
+    def get_model_name(self) -> str:
+        return self.model_name
+
+
 def create_provider(provider_type: str, **kwargs) -> LLMProvider:
     """
     Factory function to create LLM provider instances.
-    
+
     Args:
-        provider_type: One of "ollama", "groq", or "openai"
+        provider_type: One of "ollama", "groq", "openai", or "anthropic"
         **kwargs: Provider-specific configuration
-    
+
     Returns:
         LLMProvider instance
     """
     provider_type = provider_type.lower().strip()
-    
+
     if provider_type == "ollama":
         model_name = kwargs.get("model_name", "llama2")
         return OllamaProvider(model_name=model_name)
@@ -305,15 +388,27 @@ def create_provider(provider_type: str, **kwargs) -> LLMProvider:
             top_p=top_p,
             max_tokens=max_tokens
         )
-    
+
+    elif provider_type == "anthropic":
+        api_key = kwargs.get("api_key")
+        model_name = kwargs.get("model_name", "claude-sonnet-4-20250514")
+        temperature = kwargs.get("temperature", 0.3)
+        max_tokens = kwargs.get("max_tokens", 4096)
+        return AnthropicProvider(
+            api_key=api_key,
+            model_name=model_name,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
     else:
         from ..utils.exceptions import ConfigError
         raise ConfigError(
             f"Unknown LLM provider: {provider_type}",
             config_key="LLM_PROVIDER",
             fix_instructions=(
-                f"1. Set LLM_PROVIDER to one of: ollama, groq, openai\n"
+                f"1. Set LLM_PROVIDER to one of: ollama, groq, openai, anthropic\n"
                 f"2. Current value: {provider_type}\n"
-                f"3. Update your .env file with: LLM_PROVIDER=groq (or ollama/openai)"
+                f"3. Update your .env file with: LLM_PROVIDER=anthropic (or groq/ollama/openai)"
             )
         )

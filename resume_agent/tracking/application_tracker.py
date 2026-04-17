@@ -38,6 +38,62 @@ def get_db_connection():
     conn.commit()
     return conn
 
+def _normalize_for_dedup(s: str) -> str:
+    """Normalize company/job title for duplicate detection."""
+    return (s or "").strip().lower()
+
+
+def find_application_by_company_and_title(company: str, job_title: str) -> Optional[Dict]:
+    """Find an existing application with the same company and job title (case-insensitive). Used to avoid duplicates."""
+    conn = get_db_connection()
+    c_norm = _normalize_for_dedup(company)
+    t_norm = _normalize_for_dedup(job_title)
+    row = conn.execute(
+        """
+        SELECT * FROM applications
+        WHERE LOWER(TRIM(company)) = ? AND LOWER(TRIM(job_title)) = ?
+        ORDER BY updated_at DESC LIMIT 1
+        """,
+        (c_norm, t_norm),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_application_record(
+    app_id: int,
+    *,
+    job_url: Optional[str] = None,
+    fit_score: Optional[int] = None,
+    resume_doc_id: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> None:
+    """Update an existing application's details (e.g. when re-saving for same role/company)."""
+    conn = get_db_connection()
+    now = datetime.now().isoformat()
+    updates = ["application_date = ?", "updated_at = ?"]
+    values = [now, now]
+    if job_url is not None:
+        updates.append("job_url = ?")
+        values.append(job_url)
+    if fit_score is not None:
+        updates.append("fit_score = ?")
+        values.append(fit_score)
+    if resume_doc_id is not None:
+        updates.append("resume_doc_id = ?")
+        values.append(resume_doc_id)
+    if notes is not None:
+        updates.append("notes = ?")
+        values.append(notes)
+    values.append(app_id)
+    conn.execute(
+        f"UPDATE applications SET {', '.join(updates)} WHERE id = ?",
+        values,
+    )
+    conn.commit()
+    conn.close()
+
+
 def add_application(
     job_title: str,
     company: str,
@@ -61,6 +117,41 @@ def add_application(
     conn.commit()
     conn.close()
     return app_id
+
+
+def add_or_update_application(
+    job_title: str,
+    company: str,
+    job_url: Optional[str] = None,
+    fit_score: Optional[int] = None,
+    resume_doc_id: Optional[str] = None,
+    status: str = "applied",
+    notes: Optional[str] = None,
+) -> int:
+    """
+    Track application: if one already exists for this company + job title, update it
+    (e.g. new resume doc, new fit score) and return its id; otherwise add a new record.
+    Does not block evaluate or tailor; use when saving/approving to avoid duplicate entries.
+    """
+    existing = find_application_by_company_and_title(company, job_title)
+    if existing:
+        app_id = existing["id"]
+        update_application_record(
+            app_id,
+            job_url=job_url,
+            fit_score=fit_score,
+            resume_doc_id=resume_doc_id,
+        )
+        return app_id
+    return add_application(
+        job_title=job_title,
+        company=company,
+        job_url=job_url,
+        fit_score=fit_score,
+        resume_doc_id=resume_doc_id,
+        status=status,
+        notes=notes,
+    )
 
 def update_application_status(app_id: int, status: str, notes: Optional[str] = None):
     """Update the status of an application."""

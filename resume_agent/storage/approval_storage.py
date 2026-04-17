@@ -3,12 +3,16 @@ Approval Storage Abstraction
 Provides pluggable storage backends for approval workflow state.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 from datetime import datetime, timedelta
-from ..services.resume_workflow import TailorResumeResult
 from ..config import settings
 from ..utils.logger import logger
+
+if TYPE_CHECKING:
+    from ..services.resume_workflow import TailorResumeResult
 
 
 class ApprovalStorage(ABC):

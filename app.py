@@ -16,7 +16,6 @@ import resume_agent
 
 from resume_agent.config import RESUME_DOC_ID, GOOGLE_FOLDER_ID, settings
 from resume_agent.agents.jd_extractor import extract_clean_jd
-from resume_agent.storage.google_docs import get_services
 from resume_agent.tracking.application_tracker import (
     update_application_status, list_applications,
     get_statistics, search_applications, get_application
@@ -97,11 +96,9 @@ if 'llm_service' not in st.session_state:
         st.session_state.llm_error = str(e)
 
 if 'google_services' not in st.session_state:
-    try:
-        st.session_state.google_services = get_services()
-    except Exception as e:
-        st.session_state.google_services = None
-        st.session_state.google_error = str(e)
+    # Google is session-only; Streamlit app would need its own OAuth flow for Drive/Docs
+    st.session_state.google_services = None
+    st.session_state.google_error = None
 
 if 'resume_text' not in st.session_state:
     st.session_state.resume_text = None

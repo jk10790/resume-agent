@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..services.llm_service import LLMService
 from ..utils.logger import logger
 from ..models.agent_models import ValidationIssue, ResumeValidation, Severity
-from ..utils.metrics import extract_metrics, extract_metrics_from_memory, normalize_metric_set
+from ..utils.metrics import MetricMatch, extract_metrics, extract_metrics_from_memory, normalize_metric_set
 import json
 import re
 
@@ -83,7 +83,9 @@ def validate_resume_quality(
     llm_service: LLMService,
     original_resume: str,
     tailored_resume: str,
-    jd_text: str
+    jd_text: str,
+    user_skills: Optional[List[str]] = None,
+    verified_metric_records: Optional[List[Dict[str, Any]]] = None,
 ) -> ResumeValidation:
     """
     Validate a tailored resume for quality, JD coverage, and issues.
@@ -99,12 +101,12 @@ def validate_resume_quality(
         ResumeValidation with quality score and issues
     """
     from langchain_core.messages import SystemMessage, HumanMessage
-    from ..storage.user_memory import get_skills
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
-    
-    # Get user's confirmed skills
-    user_skills = get_skills()
+
+    if user_skills is None:
+        from ..storage.user_memory import get_skills
+        user_skills = get_skills()
     
     # Basic validation first (now includes original resume and user skills for comparison)
     basic_issues = _basic_validation(tailored_resume, jd_text, original_resume, user_skills)
@@ -141,7 +143,7 @@ def validate_resume_quality(
 
     # Validation 5: Metric provenance (numbers must exist in original or user-provided metrics)
     metric_issues, metric_provenance = _validate_metric_provenance(
-        original_resume, tailored_resume
+        original_resume, tailored_resume, verified_metric_records=verified_metric_records
     )
     all_issues.extend(metric_issues)
     
@@ -322,10 +324,11 @@ Compare the two resumes. Check for:
 def _validate_metric_provenance(
     original_resume: str,
     tailored_resume: str,
-    user_metric_text: Optional[str] = None
+    user_metric_text: Optional[str] = None,
+    verified_metric_records: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[List[ValidationIssue], Dict[str, Any]]:
     """Check that numeric claims are grounded in original resume or user-provided metrics."""
-    from ..storage.user_memory import load_memory
+    from ..storage.user_memory import get_verified_metrics, load_memory
 
     issues: List[ValidationIssue] = []
 
@@ -333,8 +336,20 @@ def _validate_metric_provenance(
     if user_metric_text:
         user_metrics = extract_metrics(user_metric_text)
     else:
-        memory = load_memory()
-        user_metrics = extract_metrics_from_memory(memory)
+        effective_verified_metric_records = verified_metric_records if verified_metric_records is not None else get_verified_metrics()
+        if effective_verified_metric_records:
+            user_metrics = [
+                MetricMatch(
+                    raw=str(metric.get("raw", "")),
+                    normalized=str(metric.get("normalized", "")),
+                    line=str(metric.get("line", "")),
+                    category=str(metric.get("category", "number")),
+                )
+                for metric in effective_verified_metric_records
+            ]
+        else:
+            memory = load_memory()
+            user_metrics = extract_metrics_from_memory(memory)
 
     allowed_metrics = normalize_metric_set(original_metrics + user_metrics)
     tailored_metrics = extract_metrics(tailored_resume)

@@ -1,9 +1,118 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import ResumeComparison, { diffLines } from './ResumeComparison'
 import FeedbackLearner from './FeedbackLearner'
 import './TailorResume.css'
+
+function normalizeSectionLabel(line) {
+  const trimmed = (line || '').trim()
+  if (!trimmed) return null
+  const markdownHeading = trimmed.match(/^#{1,6}\s+(.+)$/)
+  if (markdownHeading) return markdownHeading[1].trim()
+  const boldHeading = trimmed.match(/^\*\*(.+)\*\*$/)
+  if (boldHeading) return boldHeading[1].trim()
+  if (/^[A-Z][A-Z ]+$/.test(trimmed) && trimmed.length < 40) return trimmed
+  return null
+}
+
+function buildReviewDelta(previousBundle, nextBundle) {
+  if (!previousBundle || !nextBundle) return null
+  const sections = [
+    ['overall', 'Overall'],
+    ['authenticity', 'Authenticity'],
+    ['ats_parse', 'ATS Format'],
+    ['job_match', 'Job Match'],
+    ['editorial', 'Editorial'],
+  ]
+  const changes = sections
+    .map(([key, label]) => {
+      const before = previousBundle[key]?.score
+      const after = nextBundle[key]?.score
+      if (before == null || after == null || before === after) return null
+      return { key, label, before, after, delta: after - before }
+    })
+    .filter(Boolean)
+  if (changes.length === 0) return null
+  return changes.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+}
+
+function normalizeComparableLine(line) {
+  return (line || '').replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function buildPreviewRiskSignals(validation, reviewBundle) {
+  const metricFlags = (validation?.metric_provenance?.flagged_details || []).map((item) => ({
+    type: 'metric',
+    raw: item.raw || '',
+    line: item.line || '',
+    label: `Unverified metric: ${item.raw || 'number'}`,
+  }))
+  const authenticityFlags = (reviewBundle?.authenticity?.issues || [])
+    .filter((issue) => issue.evidence || issue.message)
+    .map((issue) => ({
+      type: issue.category || 'authenticity',
+      raw: issue.evidence || issue.message || '',
+      line: issue.evidence || '',
+      label: issue.message || 'Potential unsupported claim',
+    }))
+  return [...metricFlags, ...authenticityFlags]
+}
+
+function inferPreviewIntent(entryText, reviewBundle, validation) {
+  const line = normalizeComparableLine(entryText)
+  if (!line) return null
+
+  const riskSignals = buildPreviewRiskSignals(validation, reviewBundle)
+  const matchedRisk = riskSignals.find((signal) => {
+    const raw = normalizeComparableLine(signal.raw)
+    const context = normalizeComparableLine(signal.line)
+    return (raw && line.includes(raw)) || (context && line.includes(context)) || (line && raw && raw.includes(line))
+  })
+  if (matchedRisk) {
+    return {
+      label: 'Authenticity risk',
+      reason: matchedRisk.label,
+      tone: 'risk',
+    }
+  }
+
+  const jobMatchMetrics = reviewBundle?.job_match?.metrics || {}
+  const missingKeyword = (jobMatchMetrics.missing_keywords || [])
+    .map((keyword) => String(keyword).toLowerCase())
+    .find((keyword) => keyword && line.includes(keyword))
+  if (missingKeyword) {
+    return {
+      label: 'Keyword alignment',
+      reason: `This line appears to address JD language like "${missingKeyword}".`,
+      tone: 'keyword',
+    }
+  }
+
+  const atsSignals = ['email', 'phone', 'linkedin', 'github', 'summary', 'experience', 'education', 'skills']
+  if ((reviewBundle?.ats_parse?.issues || []).length > 0 && atsSignals.some((token) => line.includes(token))) {
+    return {
+      label: 'ATS cleanup',
+      reason: 'This line likely improves parser-visible structure or standard section formatting.',
+      tone: 'ats',
+    }
+  }
+
+  const editorialSignals = ['led ', 'built ', 'developed ', 'implemented ', 'designed ', 'optimized ', 'improved ']
+  if ((reviewBundle?.editorial?.issues || []).length > 0 || editorialSignals.some((token) => line.includes(token))) {
+    return {
+      label: 'Editorial rewrite',
+      reason: 'This looks like a readability, emphasis, or phrasing improvement.',
+      tone: 'editorial',
+    }
+  }
+
+  return {
+    label: 'Content adjustment',
+    reason: 'This line changed, but there is no stronger inferred review motive.',
+    tone: 'neutral',
+  }
+}
 
 function TailorResume() {
   const [company, setCompany] = useState('')
@@ -11,31 +120,22 @@ function TailorResume() {
   const [jdText, setJdText] = useState('')
   const [jobUrl, setJobUrl] = useState('')
   const [inputMethod, setInputMethod] = useState('url') // 'url' or 'text'
-  const [evaluateFirst, setEvaluateFirst] = useState(true)
+  const [evaluateFirst, setEvaluateFirst] = useState(false)
+  const [evaluateOnly, setEvaluateOnly] = useState(false)
   const [trackApplication, setTrackApplication] = useState(true)
   
-  // Resume and folder selection
-  const [resumeDocId, setResumeDocId] = useState(null) // null = no selection
-  const [saveFolderId, setSaveFolderId] = useState(null) // null = no selection
-  const [selectedResumeName, setSelectedResumeName] = useState(null)
-  const [selectedFolderName, setSelectedFolderName] = useState(null)
+  // Resume and folder selection — initialize from localStorage so we don't ask every time
+  const [resumeDocId, setResumeDocId] = useState(() => localStorage.getItem('resume_agent_last_resume_id') || null)
+  const [saveFolderId, setSaveFolderId] = useState(() => localStorage.getItem('resume_agent_last_folder_id') || null)
+  const [selectedResumeName, setSelectedResumeName] = useState(() => localStorage.getItem('resume_agent_last_resume_name') || null)
+  const [selectedFolderName, setSelectedFolderName] = useState(() => localStorage.getItem('resume_agent_last_folder_name') || null)
   const [availableResumes, setAvailableResumes] = useState([])
   const [availableFolders, setAvailableFolders] = useState([])
   const [loadingResumes, setLoadingResumes] = useState(false)
   const [loadingFolders, setLoadingFolders] = useState(false)
-  // Check localStorage first to determine initial state
-  const getInitialResumeSelectorState = () => {
-    const lastResumeId = localStorage.getItem('resume_agent_last_resume_id');
-    return !lastResumeId; // Show selector only if no saved selection
-  };
-  
-  const getInitialFolderSelectorState = () => {
-    const lastFolderId = localStorage.getItem('resume_agent_last_folder_id');
-    return !lastFolderId; // Show selector only if no saved selection
-  };
-  
-  const [showResumeSelector, setShowResumeSelector] = useState(getInitialResumeSelectorState())
-  const [showFolderSelector, setShowFolderSelector] = useState(getInitialFolderSelectorState())
+  // Collapse selectors when we have a cached selection
+  const [showResumeSelector, setShowResumeSelector] = useState(() => !localStorage.getItem('resume_agent_last_resume_id'))
+  const [showFolderSelector, setShowFolderSelector] = useState(() => !localStorage.getItem('resume_agent_last_folder_id'))
   
   const [progress, setProgress] = useState(null)
   const [result, setResult] = useState(null)
@@ -49,8 +149,17 @@ function TailorResume() {
   // Approval workflow states
   const [approvalId, setApprovalId] = useState(null)
   const [approvalRequired, setApprovalRequired] = useState(false)
+  const [comparisonBaseTailored, setComparisonBaseTailored] = useState('')
+  const [isApplyingComparisonHunk, setIsApplyingComparisonHunk] = useState(false)
   const [refinementFeedback, setRefinementFeedback] = useState('')
+  const [refinementPreserveSections, setRefinementPreserveSections] = useState(['education'])
+  const [refinementEditSections, setRefinementEditSections] = useState([])
+  const [refinementTargetEntry, setRefinementTargetEntry] = useState('')
+  const [protectedEntries, setProtectedEntries] = useState([])
   const [showInlineDiff, setShowInlineDiff] = useState(true) // Show diff by default
+  const [lastReviewDelta, setLastReviewDelta] = useState(null)
+  const previewSectionRefs = useRef({})
+  const refinementTextareaRef = useRef(null)
   
   // Search/filter states
   const [resumeSearchQuery, setResumeSearchQuery] = useState('')
@@ -63,17 +172,54 @@ function TailorResume() {
   const [skillsExtracted, setSkillsExtracted] = useState(false)
   const [extractedSkills, setExtractedSkills] = useState([])
   const [confirmedSkills, setConfirmedSkills] = useState([])
+  const [detectedSkillRecords, setDetectedSkillRecords] = useState([])
+  const [suggestedSkillRecords, setSuggestedSkillRecords] = useState([])
+  const [verifiedMetrics, setVerifiedMetrics] = useState([])
+  const [experienceProfile, setExperienceProfile] = useState(null)
+  const [profileStatus, setProfileStatus] = useState(null)
   const [showSkillConfirmation, setShowSkillConfirmation] = useState(false)
   const [extractingSkills, setExtractingSkills] = useState(false)
+  const [skillInputValue, setSkillInputValue] = useState('')
+  const [skillInputSuggestions, setSkillInputSuggestions] = useState([])
+  const [metricInputValue, setMetricInputValue] = useState('')
 
   // Resume quality analysis state
   const [qualityReport, setQualityReport] = useState(null)
   const [analyzingQuality, setAnalyzingQuality] = useState(false)
   const [showQualityReport, setShowQualityReport] = useState(false)
   const [qualityAnswers, setQualityAnswers] = useState({})  // User answers to clarifying questions
+  const [qualityIssueResolutions, setQualityIssueResolutions] = useState({})
   const [editedImprovedResume, setEditedImprovedResume] = useState('')  // Editable improved resume
   const [savingImprovedResume, setSavingImprovedResume] = useState(false)
+  const [updatingDoc, setUpdatingDoc] = useState(false)
+  const [lastRecheckAt, setLastRecheckAt] = useState(null)
+  const [lastRecheckScore, setLastRecheckScore] = useState(null)  // Score from last Re-check so we can show "Re-checked: X/100"
   const [previewMode, setPreviewMode] = useState('preview')  // 'edit' or 'preview'
+
+  // Prefill from query (e.g. Chrome extension: ?job_url=...&company=...&job_title=...)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const url = params.get('job_url')
+    if (url) setJobUrl(decodeURIComponent(url))
+    const company = params.get('company')
+    if (company) setCompany(decodeURIComponent(company))
+    const jobTitle = params.get('job_title')
+    if (jobTitle) setJobTitle(decodeURIComponent(jobTitle))
+  }, [])
+
+  const persistPreferredResume = useCallback(async (docId, docName) => {
+    if (!isAuthenticated || !docId) return
+    try {
+      await fetch('/api/user/preferences/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ doc_id: docId, name: docName || null })
+      })
+    } catch (err) {
+      console.warn('Failed to persist preferred resume:', err)
+    }
+  }, [isAuthenticated])
 
   const analyzeResumeQuality = async () => {
     if (!resumeDocId) {
@@ -114,6 +260,7 @@ function TailorResume() {
               cached_version: cached.version,
               cached_updated_at: cached.updated_at
             })
+            setQualityIssueResolutions({})
             setEditedImprovedResume(cached.text)
             setShowQualityReport(true)
             setAnalyzingQuality(false)
@@ -139,6 +286,7 @@ function TailorResume() {
       
       const data = await response.json()
       setQualityReport(data)
+      setQualityIssueResolutions({})
       setEditedImprovedResume('')  // Reset to start fresh
       setShowQualityReport(true)
     } catch (err) {
@@ -166,12 +314,14 @@ function TailorResume() {
         ? {
             resume_text: editedImprovedResume,  // Use the current edited text
             improve: true,
-            user_answers: qualityAnswers
+            user_answers: qualityAnswers,
+            issue_resolutions: qualityIssueResolutions
           }
         : {
             resume_doc_id: resumeDocId,
             improve: true,
-            user_answers: qualityAnswers
+            user_answers: qualityAnswers,
+            issue_resolutions: qualityIssueResolutions
           }
       
       const response = await fetch('/api/analyze-resume-quality', {
@@ -186,11 +336,42 @@ function TailorResume() {
       }
       
       const data = await response.json()
+      if (data.quality_debug) {
+        console.debug('Resume quality improvement diagnostics:', data.quality_debug)
+      }
       setQualityReport(data)
       setShowQualityReport(true)
-      // Set the improved resume for editing (backend auto-caches it)
       if (data.improved_resume) {
         setEditedImprovedResume(data.improved_resume)
+        // Auto-run quality check on the improved resume (skip when we kept original due to lower score)
+        if (!data.quality_decreased) {
+          try {
+            const recheckRes = await fetch('/api/analyze-resume-quality', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              resume_text: data.improved_resume,
+              resume_doc_id: resumeDocId,
+              improve: false
+            })
+          })
+          if (recheckRes.ok) {
+            const recheckData = await recheckRes.json()
+            setQualityReport(prev => ({
+              ...recheckData,
+              improved_resume: prev.improved_resume,
+              before_score: prev.before_score,
+              after_score: recheckData.overall_score,
+              changes_made: prev.changes_made,
+              metrics_added: prev.metrics_added,
+              retried: prev.retried
+            }))
+          }
+          } catch (_) {
+            // Non-fatal: keep the improve result even if re-check fails
+          }
+        }
       }
     } catch (err) {
       console.error('Resume improvement error:', err)
@@ -198,6 +379,23 @@ function TailorResume() {
     } finally {
       setAnalyzingQuality(false)
     }
+  }
+
+  const getIssueResolution = (issue) => {
+    return qualityIssueResolutions[issue.id] || { action: 'approve', custom_text: '' }
+  }
+
+  const updateIssueResolution = (issueId, action, customText = null) => {
+    setQualityIssueResolutions(prev => {
+      const current = prev[issueId] || { action: 'approve', custom_text: '' }
+      return {
+        ...prev,
+        [issueId]: {
+          action,
+          custom_text: customText === null ? current.custom_text : customText
+        }
+      }
+    })
   }
 
   // Load cached improved resume from backend
@@ -226,34 +424,45 @@ function TailorResume() {
     }))
   }
 
-  // Re-check quality of the improved resume
+  // Re-check quality of the improved resume (re-analyzes current text and updates report)
   const recheckQuality = async () => {
     if (!editedImprovedResume) return
-    
+
+    setError(null)
     setAnalyzingQuality(true)
-    
+
     try {
       const response = await fetch('/api/analyze-resume-quality', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          resume_text: editedImprovedResume,  // Use the edited text
-          resume_doc_id: resumeDocId,  // Pass doc_id so backend can update cache
+          resume_text: editedImprovedResume,
+          resume_doc_id: resumeDocId,
           improve: false
         })
       })
-      
+
       if (!response.ok) {
-        throw new Error(`Failed to analyze: ${response.statusText}`)
+        const errData = await response.json().catch(() => ({}))
+        throw new Error(errData.detail || response.statusText)
       }
-      
+
       const data = await response.json()
-      setQualityReport(data)
-      setQualityAnswers({})  // Reset answers for new round
+      setQualityReport(prev => ({
+        ...data,
+        improved_resume: prev?.improved_resume ?? data.improved_resume,
+        before_score: prev?.before_score ?? data.before_score,
+        after_score: data.overall_score,
+        changes_made: prev?.changes_made ?? data.changes_made,
+        metrics_added: prev?.metrics_added ?? data.metrics_added
+      }))
+      setLastRecheckAt(Date.now())
+      setLastRecheckScore(data.overall_score)
+      setQualityAnswers({})
     } catch (err) {
       console.error('Re-check quality error:', err)
-      setError(`Failed to re-check quality: ${err.message}`)
+      setError(`Re-check failed: ${err.message}`)
     } finally {
       setAnalyzingQuality(false)
     }
@@ -308,6 +517,32 @@ function TailorResume() {
     }
   }
 
+  // Update the selected Google Doc in place with improved content (only for Google Docs, not PDFs)
+  const updateResumeDocInPlace = async () => {
+    if (!editedImprovedResume || !resumeDocId) return
+    setUpdatingDoc(true)
+    try {
+      const response = await fetch('/api/update-resume-doc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ doc_id: resumeDocId, resume_text: editedImprovedResume })
+      })
+      if (!response.ok) {
+        const err = await response.json()
+        throw new Error(err.detail || 'Failed to update doc')
+      }
+      const data = await response.json()
+      alert('✅ Resume updated in your Google Doc.\n\nRefresh the doc tab to see changes.')
+      if (data.doc_url) window.open(data.doc_url, '_blank')
+    } catch (err) {
+      console.error('Update doc error:', err)
+      alert(`❌ ${err.message}`)
+    } finally {
+      setUpdatingDoc(false)
+    }
+  }
+
   const handleExtractJD = async () => {
     if (!jobUrl) {
       setError('Please enter a job URL')
@@ -341,49 +576,33 @@ function TailorResume() {
     }
   }
 
-  // Load available resumes and folders
+  // Refresh resume and folder lists (e.g. after saving a new tailored doc)
+  const refreshResumeAndFolderLists = useCallback(async () => {
+    setLoadingResumes(true);
+    setLoadingFolders(true);
+    try {
+      const [docsRes, foldersRes] = await Promise.all([
+        fetch('/api/google-docs?max_results=100', { credentials: 'include' }),
+        fetch('/api/google-folders?max_results=100', { credentials: 'include' })
+      ]);
+      if (docsRes.ok) {
+        const data = await docsRes.json();
+        setAvailableResumes(data.docs || []);
+      } else if (docsRes.status === 401) setAvailableResumes([]);
+      if (foldersRes.ok) {
+        const data = await foldersRes.json();
+        setAvailableFolders(data.folders || []);
+      } else if (foldersRes.status === 401) setAvailableFolders([]);
+    } catch (err) {
+      console.error('Failed to refresh lists:', err);
+    } finally {
+      setLoadingResumes(false);
+      setLoadingFolders(false);
+    }
+  }, []);
+
+  // Load available resumes and folders on mount
   useEffect(() => {
-    const loadResumes = async () => {
-      setLoadingResumes(true);
-      try {
-        const response = await fetch('/api/google-docs?max_results=20', {
-          credentials: 'include'
-        });
-        if (response.ok) {
-          const data = await response.json();
-          setAvailableResumes(data.docs || []);
-        } else if (response.status === 401) {
-          // Not authenticated - clear lists
-          setAvailableResumes([]);
-        }
-      } catch (err) {
-        console.error('Failed to load resumes:', err);
-      } finally {
-        setLoadingResumes(false);
-      }
-    };
-
-    const loadFolders = async () => {
-      setLoadingFolders(true);
-      try {
-        const response = await fetch('/api/google-folders?max_results=20', {
-          credentials: 'include'
-        });
-        if (response.ok) {
-          const data = await response.json();
-          setAvailableFolders(data.folders || []);
-        } else if (response.status === 401) {
-          // Not authenticated - clear lists
-          setAvailableFolders([]);
-        }
-      } catch (err) {
-        console.error('Failed to load folders:', err);
-      } finally {
-        setLoadingFolders(false);
-      }
-    };
-
-    // Check auth status and load if authenticated
     const checkAndLoad = async () => {
       try {
         const response = await fetch('/api/auth/google/status', {
@@ -391,10 +610,8 @@ function TailorResume() {
         });
         const data = await response.json();
         setIsAuthenticated(data.authenticated);
-        
         if (data.authenticated) {
-          loadResumes();
-          loadFolders();
+          await refreshResumeAndFolderLists();
         } else {
           setAvailableResumes([]);
           setAvailableFolders([]);
@@ -406,77 +623,134 @@ function TailorResume() {
         setAvailableFolders([]);
       }
     };
-
     checkAndLoad();
-  }, []);
+  }, [refreshResumeAndFolderLists]);
 
-  // Load last used selections after resumes/folders are loaded
   useEffect(() => {
-    if (availableResumes.length > 0 || availableFolders.length > 0) {
-      // Load last used selections from localStorage
-      const lastResumeId = localStorage.getItem('resume_agent_last_resume_id');
-      const lastResumeName = localStorage.getItem('resume_agent_last_resume_name');
-      const lastFolderId = localStorage.getItem('resume_agent_last_folder_id');
-      const lastFolderName = localStorage.getItem('resume_agent_last_folder_name');
-      
-      // Only set if the resume/folder still exists in available list
-      if (lastResumeId && lastResumeName) {
-        const resumeExists = availableResumes.find(d => d.id === lastResumeId);
-        if (resumeExists) {
-          setResumeDocId(lastResumeId);
-          setSelectedResumeName(lastResumeName);
-          setShowResumeSelector(false); // Hide selector if we have a valid last selection
-          
-          // Check if skills were already extracted for this resume
-          const skillsExtractedForResume = localStorage.getItem(`resume_agent_skills_extracted_${lastResumeId}`);
-          if (skillsExtractedForResume === 'true') {
-            setSkillsExtracted(true);
-          }
-        } else {
-          // Clear invalid stored selection
-          localStorage.removeItem('resume_agent_last_resume_id');
-          localStorage.removeItem('resume_agent_last_resume_name');
-        }
+    if (isAuthenticated && resumeDocId) {
+      persistPreferredResume(resumeDocId, selectedResumeName)
+    }
+  }, [isAuthenticated, resumeDocId, selectedResumeName, persistPreferredResume])
+
+  // When lists load, sync names from list if cached id is present; keep cached selection even if not in list (e.g. list pagination)
+  useEffect(() => {
+    const lastResumeId = localStorage.getItem('resume_agent_last_resume_id');
+    const lastFolderId = localStorage.getItem('resume_agent_last_folder_id');
+    if (lastResumeId && availableResumes.length > 0) {
+      const resumeExists = availableResumes.find(d => d.id === lastResumeId);
+      if (resumeExists) {
+        setResumeDocId(lastResumeId);
+        setSelectedResumeName(localStorage.getItem('resume_agent_last_resume_name') || resumeExists.name);
+        setShowResumeSelector(false);
+        const skillsExtractedForResume = localStorage.getItem(`resume_agent_skills_extracted_${lastResumeId}`);
+        if (skillsExtractedForResume === 'true') setSkillsExtracted(true);
       }
-      
-      if (lastFolderId && lastFolderName) {
-        const folderExists = availableFolders.find(f => f.id === lastFolderId);
-        if (folderExists) {
-          setSaveFolderId(lastFolderId);
-          setSelectedFolderName(lastFolderName);
-          setShowFolderSelector(false); // Hide selector if we have a valid last selection
-        } else {
-          // Clear invalid stored selection
-          localStorage.removeItem('resume_agent_last_folder_id');
-          localStorage.removeItem('resume_agent_last_folder_name');
-        }
+    }
+    if (lastFolderId && availableFolders.length > 0) {
+      const folderExists = availableFolders.find(f => f.id === lastFolderId);
+      if (folderExists) {
+        setSaveFolderId(lastFolderId);
+        setSelectedFolderName(localStorage.getItem('resume_agent_last_folder_name') || folderExists.name);
+        setShowFolderSelector(false);
       }
     }
   }, [availableResumes, availableFolders]);
   
   // Load confirmed skills on mount
   useEffect(() => {
-    const loadConfirmedSkills = async () => {
+    const loadProfileState = async () => {
       try {
-        const response = await fetch('/api/user/skills', {
-          credentials: 'include'
-        });
-        if (response.ok) {
-          const data = await response.json();
+        const [skillsResponse, statusResponse, metricsResponse] = await Promise.all([
+          fetch('/api/user/skills', {
+            credentials: 'include'
+          }),
+          fetch('/api/user/profile/status', {
+            credentials: 'include'
+          }),
+          fetch('/api/user/metrics', {
+            credentials: 'include'
+          })
+        ])
+        if (skillsResponse.ok) {
+          const data = await skillsResponse.json();
           if (data.skills && data.skills.length > 0) {
             setConfirmedSkills(data.skills);
             setSkillsExtracted(true);
+          } else {
+            setConfirmedSkills([]);
+            setSkillsExtracted(false);
           }
         }
+        if (statusResponse.ok) {
+          const statusData = await statusResponse.json();
+          setProfileStatus(statusData);
+        }
+        if (metricsResponse.ok) {
+          const metricsData = await metricsResponse.json();
+          setVerifiedMetrics(metricsData.metrics || []);
+        }
       } catch (err) {
-        console.error('Failed to load confirmed skills:', err);
+        console.error('Failed to load profile state:', err);
       }
     };
     
     if (isAuthenticated) {
-      loadConfirmedSkills();
+      loadProfileState();
     }
   }, [isAuthenticated]);
+
+  useEffect(() => {
+    const loadDetectedState = async () => {
+      if (!isAuthenticated) return
+      try {
+        const response = await fetch('/api/user/profile/status', {
+          credentials: 'include'
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setProfileStatus(data);
+        }
+      } catch (err) {
+        console.error('Failed to refresh profile status:', err);
+      }
+    }
+    if (resumeDocId && isAuthenticated) {
+      loadDetectedState()
+    }
+  }, [resumeDocId, isAuthenticated]);
+
+  useEffect(() => {
+    const fetchSuggestions = async () => {
+      if (!skillInputValue.trim()) {
+        setSkillInputSuggestions([])
+        return
+      }
+      try {
+        const roleHint = jobTitle || (experienceProfile?.job_titles && experienceProfile.job_titles[0]) || ''
+        const params = new URLSearchParams({
+          q: skillInputValue,
+          role_hint: roleHint,
+          limit: '8'
+        })
+        const response = await fetch(`/api/user/skills/suggestions?${params.toString()}`, {
+          credentials: 'include'
+        })
+        if (!response.ok) {
+          setSkillInputSuggestions([])
+          return
+        }
+        const data = await response.json()
+        setSkillInputSuggestions(data.suggestions || [])
+      } catch (err) {
+        console.error('Failed to load skill suggestions:', err)
+        setSkillInputSuggestions([])
+      }
+    }
+
+    if (showSkillConfirmation && isAuthenticated) {
+      fetchSuggestions()
+    }
+  }, [skillInputValue, jobTitle, experienceProfile, isAuthenticated, showSkillConfirmation])
 
   const extractSkills = async () => {
     if (!resumeDocId) {
@@ -488,8 +762,7 @@ function TailorResume() {
     setError(null)
     
     try {
-      // Extract skills
-      const response = await fetch('/api/resume/extract-skills', {
+      const response = await fetch('/api/user/profile/bootstrap', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -506,8 +779,15 @@ function TailorResume() {
       }
       
       const data = await response.json()
-      setExtractedSkills(data.skills.all_skills || [])
-      setConfirmedSkills(data.skills.all_skills || []) // Pre-populate with extracted skills
+      const detected = data.detected_skills || []
+      const suggested = data.suggested_skills || []
+      const detectedNames = detected.map(skill => skill.name)
+
+      setDetectedSkillRecords(detected)
+      setSuggestedSkillRecords(suggested)
+      setExtractedSkills(detectedNames)
+      setConfirmedSkills(prev => prev.length > 0 ? prev : detectedNames)
+      setExperienceProfile(data.experience || null)
       setSkillsExtracted(true)
       setShowSkillConfirmation(true)
       
@@ -581,6 +861,11 @@ function TailorResume() {
       
       const data = await response.json()
       setConfirmedSkills(data.skills || confirmedSkills)
+      setProfileStatus(prev => prev ? {
+        ...prev,
+        confirmed_skills_count: (data.skills || confirmedSkills).length,
+        onboarding_required: (data.skills || confirmedSkills).length === 0
+      } : prev)
       
       // Mark skills as extracted for this resume
       if (resumeDocId) {
@@ -592,6 +877,37 @@ function TailorResume() {
       setError(null)
     } catch (err) {
       setError(`Failed to save skills: ${err.message}`)
+    }
+  }
+
+  const importMetrics = async () => {
+    if (!metricInputValue.trim()) {
+      return
+    }
+
+    try {
+      const response = await fetch('/api/user/metrics/import', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ text: metricInputValue.trim() })
+      })
+
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.detail || 'Failed to import metrics')
+      }
+
+      setVerifiedMetrics(data.metrics || [])
+      setMetricInputValue('')
+      setProfileStatus(prev => prev ? {
+        ...prev,
+        confirmed_metrics_count: (data.metrics || []).length
+      } : prev)
+    } catch (err) {
+      setError(`Failed to import metrics: ${err.message}`)
     }
   }
   
@@ -657,13 +973,18 @@ function TailorResume() {
     }
   }
 
-  const handleTailor = async () => {
-    // Validation: need company, job title, and either URL or JD text
-    if (!company || !jobTitle) {
-      setError('Please fill in Company Name and Job Title')
+  const addSkillToConfirmed = (skillName) => {
+    if (!skillName || confirmedSkills.includes(skillName)) {
       return
     }
+    setConfirmedSkills(prev => [...prev, skillName])
+    if (!extractedSkills.includes(skillName)) {
+      setExtractedSkills(prev => [...prev, skillName])
+    }
+  }
 
+  const handleTailor = async () => {
+    // Validation: need either URL or JD text (company and job title are optional; used for save folder naming)
     if (!jobUrl && !jdText.trim()) {
       setError('Please provide either a Job Listing URL or paste the Job Description')
       return
@@ -712,22 +1033,27 @@ function TailorResume() {
 
     // Note: saveFolderId is optional - backend will use configured default folder if not provided
     
-    // Check if skills have been extracted and confirmed
-    if (!skillsExtracted && resumeDocId) {
-      // Auto-extract skills first, then show confirmation modal
-      await extractSkills()
-      // Don't proceed until user confirms skills in the modal
-      return
-    }
-    
-    if (!skillsExtracted) {
-      setError('Please extract and confirm your skills before tailoring')
-      return
+    if (!evaluateOnly) {
+      // Check if skills have been extracted and confirmed
+      if (!skillsExtracted && resumeDocId) {
+        // Auto-extract skills first, then show confirmation modal
+        await extractSkills()
+        // Don't proceed until user confirms skills in the modal
+        return
+      }
+
+      if (!skillsExtracted) {
+        setError('Please extract and confirm your skills before tailoring')
+        return
+      }
     }
 
     setIsLoading(true)
     setError(null)
     setResult(null) // Clear previous result
+    setProtectedEntries([])
+    setRefinementTargetEntry('')
+    setLastReviewDelta(null)
     setProgress({
       currentStep: 0,
       totalSteps: 0,
@@ -748,6 +1074,7 @@ function TailorResume() {
                   jd_text: finalJdText,
                   job_url: jobUrl || null,
                   evaluate_first: evaluateFirst,
+                  evaluate_only: evaluateOnly,
                   track_application: trackApplication,
                   resume_doc_id: resumeDocId || null,
                   save_folder_id: saveFolderId || null
@@ -881,6 +1208,8 @@ function TailorResume() {
                 timestamp: Date.now()
               }
               setResult(newResult)
+              setLastReviewDelta(null)
+              setComparisonBaseTailored('')
               setIsLoading(false) // Stop loading spinner, show approval UI
             }
             
@@ -934,7 +1263,11 @@ function TailorResume() {
               }
               console.log('Setting result with timestamp:', newResult.timestamp, 'resume length:', newResult.tailored_resume.length)
               setResult(newResult)
+              setLastReviewDelta(null)
+              setComparisonBaseTailored('')
               setIsLoading(false)
+              // Refresh resume and folder lists so the newly saved doc appears
+              if (data.result?.doc_url) refreshResumeAndFolderLists()
             }
           }
         }
@@ -975,6 +1308,7 @@ function TailorResume() {
       
       // Update result with final data
       if (data.result) {
+        const nextReviewDelta = buildReviewDelta(result?.review_bundle, data.result.review_bundle)
         setResult({
           ...result,
           doc_url: data.result.doc_url,
@@ -982,6 +1316,8 @@ function TailorResume() {
           timestamp: Date.now()
         })
       }
+      // Refresh resume and folder lists so the newly saved doc appears
+      refreshResumeAndFolderLists()
     } catch (err) {
       setError(err.message)
     } finally {
@@ -1007,7 +1343,11 @@ function TailorResume() {
         credentials: 'include',
         body: JSON.stringify({
           approval_id: approvalId,
-          feedback: refinementFeedback
+          feedback: refinementFeedback,
+          sections_to_tailor: refinementEditSections.length > 0 ? refinementEditSections : null,
+          target_entry_text: refinementTargetEntry || null,
+          protected_entry_texts: protectedEntries,
+          preserve_sections: refinementPreserveSections
         })
       })
       
@@ -1030,6 +1370,7 @@ function TailorResume() {
           tailored_resume: data.result.tailored_resume || result.tailored_resume,
           original_resume_text: data.result.original_resume_text || result.original_resume_text,
           validation: data.result.validation || result.validation,
+          review_bundle: data.result.review_bundle || result.review_bundle,
           jd_requirements: data.result.jd_requirements || result.jd_requirements,
           ats_score: data.result.ats_score !== undefined ? data.result.ats_score : result.ats_score,
           approval_required: data.result.approval_required !== undefined ? data.result.approval_required : true,
@@ -1037,6 +1378,8 @@ function TailorResume() {
           current_tailoring_iteration: data.result.current_tailoring_iteration || result.current_tailoring_iteration,
           timestamp: Date.now()
         })
+        setLastReviewDelta(nextReviewDelta)
+        setComparisonBaseTailored('')
         
         // Update approval state from response
         setApprovalRequired(data.result.approval_required !== undefined ? data.result.approval_required : true)
@@ -1051,11 +1394,292 @@ function TailorResume() {
       }
       
       setRefinementFeedback('')
+      if (refinementTargetEntry && !protectedEntries.includes(refinementTargetEntry)) {
+        setRefinementTargetEntry('')
+      }
     } catch (err) {
       setError(err.message)
     } finally {
       setIsLoading(false)
     }
+  }
+
+  const toggleProtectedEntry = (entryText) => {
+    if (!entryText) return
+    setProtectedEntries((prev) =>
+      prev.includes(entryText)
+        ? prev.filter((entry) => entry !== entryText)
+        : [...prev, entryText]
+    )
+  }
+
+  const handleQuickRefineEntry = (entryText) => {
+    if (!entryText) return
+    setRefinementTargetEntry(entryText)
+    if (refinementTextareaRef.current && typeof refinementTextareaRef.current.focus === 'function') {
+      refinementTextareaRef.current.focus()
+    }
+  }
+
+  const handleOpenComparison = () => {
+    setComparisonBaseTailored(result?.tailored_resume || '')
+    setShowComparison(true)
+  }
+
+  const handleCloseComparison = () => {
+    setShowComparison(false)
+    setComparisonBaseTailored('')
+  }
+
+  const handleApplyComparisonDraft = async (updatedResumeText) => {
+    if (!approvalId || !updatedResumeText) return
+    setIsApplyingComparisonHunk(true)
+    setError(null)
+    try {
+      const response = await fetch('/api/update-approval-draft', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          approval_id: approvalId,
+          tailored_resume: updatedResumeText
+        })
+      })
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Failed to update comparison draft')
+      }
+      const data = await response.json()
+      if (data.result) {
+        const nextReviewDelta = buildReviewDelta(result?.review_bundle, data.result.review_bundle)
+        setResult({
+          ...result,
+          tailored_resume: data.result.tailored_resume || result.tailored_resume,
+          original_resume_text: data.result.original_resume_text || result.original_resume_text,
+          validation: data.result.validation || result.validation,
+          review_bundle: data.result.review_bundle || result.review_bundle,
+          jd_requirements: data.result.jd_requirements || result.jd_requirements,
+          ats_score: data.result.ats_score !== undefined ? data.result.ats_score : result.ats_score,
+          approval_required: data.result.approval_required !== undefined ? data.result.approval_required : true,
+          approval_status: data.result.approval_status || result.approval_status || 'pending',
+          current_tailoring_iteration: data.result.current_tailoring_iteration || result.current_tailoring_iteration,
+          timestamp: Date.now()
+        })
+        setLastReviewDelta(nextReviewDelta)
+        setComparisonBaseTailored('')
+      }
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setIsApplyingComparisonHunk(false)
+    }
+  }
+
+  const handleRevertEntry = async (entryText) => {
+    if (!approvalId || !entryText) return
+
+    setIsLoading(true)
+    setError(null)
+
+    try {
+      const response = await fetch('/api/refine-resume', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          approval_id: approvalId,
+          feedback: 'Revert this line to the original wording from the source resume.',
+          target_entry_text: entryText,
+          revert_target_entry: true,
+          protected_entry_texts: protectedEntries.filter((entry) => entry !== entryText),
+          preserve_sections: refinementPreserveSections
+        })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Failed to revert line')
+      }
+
+      const data = await response.json()
+      if (data.result) {
+        const nextReviewDelta = buildReviewDelta(result?.review_bundle, data.result.review_bundle)
+        setResult({
+          ...result,
+          tailored_resume: data.result.tailored_resume || result.tailored_resume,
+          original_resume_text: data.result.original_resume_text || result.original_resume_text,
+          validation: data.result.validation || result.validation,
+          review_bundle: data.result.review_bundle || result.review_bundle,
+          jd_requirements: data.result.jd_requirements || result.jd_requirements,
+          ats_score: data.result.ats_score !== undefined ? data.result.ats_score : result.ats_score,
+          approval_required: data.result.approval_required !== undefined ? data.result.approval_required : true,
+          approval_status: data.result.approval_status || result.approval_status || 'pending',
+          current_tailoring_iteration: data.result.current_tailoring_iteration || result.current_tailoring_iteration,
+          timestamp: Date.now()
+        })
+        setLastReviewDelta(nextReviewDelta)
+      }
+      setProtectedEntries((prev) => prev.filter((entry) => entry !== entryText))
+      if (refinementTargetEntry === entryText) {
+        setRefinementTargetEntry('')
+      }
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const toggleRefinementPreserveSection = (sectionName) => {
+    setRefinementPreserveSections(prev =>
+      prev.includes(sectionName)
+        ? prev.filter(section => section !== sectionName)
+        : [...prev, sectionName]
+    )
+  }
+
+  const toggleRefinementEditSection = (sectionName) => {
+    setRefinementEditSections(prev =>
+      prev.includes(sectionName)
+        ? prev.filter(section => section !== sectionName)
+        : [...prev, sectionName]
+    )
+  }
+
+  const refinementEntryOptions = useMemo(() => {
+    if (!result?.tailored_resume) return []
+    const seen = new Set()
+    return result.tailored_resume
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => {
+        if (!line) return false
+        if (/^#{1,6}\s/.test(line)) return false
+        if (/^\*\*[A-Z ]+\*\*$/.test(line)) return false
+        if (line.length < 12) return false
+        if (seen.has(line)) return false
+        seen.add(line)
+        return true
+      })
+      .slice(0, 80)
+  }, [result?.tailored_resume])
+
+  const clickableRefinementLines = useMemo(() => {
+    if (!result?.tailored_resume) return []
+    let currentSection = 'Header'
+    return result.tailored_resume.split('\n').map((rawLine, index) => {
+      const line = rawLine.trim()
+      const sectionLabel = normalizeSectionLabel(line)
+      if (sectionLabel) {
+        currentSection = sectionLabel
+      }
+      const isHeading = !!sectionLabel
+      const isSelectable = !!line && !isHeading && line.length >= 12
+      return {
+        key: `${index}-${line}`,
+        text: line,
+        rawLine,
+        isHeading,
+        isSelectable,
+        section: currentSection,
+        isProtected: protectedEntries.includes(line)
+      }
+    })
+  }, [protectedEntries, result?.tailored_resume])
+
+  const clickablePreviewSections = useMemo(() => {
+    const seen = new Set()
+    return clickableRefinementLines
+      .map(line => line.section)
+      .filter(section => {
+        if (!section || seen.has(section)) return false
+        seen.add(section)
+        return true
+      })
+  }, [clickableRefinementLines])
+
+  const authenticityWarnings = useMemo(() => {
+    const bundleIssues = result?.review_bundle?.authenticity?.issues || []
+    const metricFlags = result?.validation?.metric_provenance?.flagged_details || []
+    return {
+      issues: bundleIssues.slice(0, 4),
+      metricFlags: metricFlags.slice(0, 4),
+    }
+  }, [result?.review_bundle, result?.validation])
+
+  const selectedPreviewIntent = useMemo(() => {
+    if (!refinementTargetEntry) return null
+    return inferPreviewIntent(refinementTargetEntry, result?.review_bundle, result?.validation)
+  }, [refinementTargetEntry, result?.review_bundle, result?.validation])
+
+  const jumpToPreviewSection = (section) => {
+    const node = previewSectionRefs.current[section]
+    if (node && typeof node.scrollIntoView === 'function') {
+      node.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }
+
+  const renderReviewSection = (title, emoji, section) => {
+    if (!section) return null
+
+    return (
+      <div className="validation-container">
+        <div className="validation-header">
+          <strong>{emoji} {title}</strong>
+          <span className={`quality-score score-${section.score >= 80 ? 'high' : section.score >= 60 ? 'medium' : 'low'}`}>
+            Score: {section.score}/100
+          </span>
+        </div>
+        {section.summary && (
+          <div className="result-item" style={{ marginBottom: '0.75rem' }}>
+            {section.summary}
+          </div>
+        )}
+        {section.metrics && (
+          <div className="metric-summary" style={{ marginBottom: '0.75rem' }}>
+            {Object.entries(section.metrics)
+              .filter(([, value]) => value !== null && value !== undefined && value !== '' && (!Array.isArray(value) || value.length > 0))
+              .slice(0, 4)
+              .map(([key, value]) => (
+                <span key={key}>
+                  {key.replace(/_/g, ' ')}: {Array.isArray(value) ? value.slice(0, 4).join(', ') : String(value)}
+                </span>
+              ))}
+          </div>
+        )}
+        {section.issues && section.issues.length > 0 && (
+          <div className="validation-issues">
+            <strong>Issues Found:</strong>
+            {section.issues.map((issue, idx) => (
+              <div key={idx} className={`issue issue-${issue.severity}`}>
+                <span className="issue-severity">{issue.severity.toUpperCase()}</span>
+                <span className="issue-message">{issue.message}</span>
+                {issue.evidence && (
+                  <div className="issue-suggestion">Evidence: {issue.evidence}</div>
+                )}
+                {issue.suggestion && (
+                  <div className="issue-suggestion">💡 {issue.suggestion}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {section.recommendations && section.recommendations.length > 0 && (
+          <div className="validation-recommendations">
+            <strong>Recommendations:</strong>
+            <ul>
+              {section.recommendations.map((rec, idx) => (
+                <li key={idx}>{rec}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    )
   }
 
   // Inline diff component for approval UI
@@ -1158,7 +1782,7 @@ function TailorResume() {
       <h2>Tailor Your Resume</h2>
       
       <div className="form-group">
-        <label>Company Name *</label>
+        <label>Company Name (optional, for save folder naming)</label>
         <input
           type="text"
           value={company}
@@ -1169,7 +1793,7 @@ function TailorResume() {
       </div>
 
       <div className="form-group">
-        <label>Job Title *</label>
+        <label>Job Title (optional, for save folder naming)</label>
         <input
           type="text"
           value={jobTitle}
@@ -1193,13 +1817,65 @@ function TailorResume() {
               </button>
             </div>
             
-            <div className="quality-score-section">
+            <div className="quality-score-section" key={lastRecheckAt ?? 'initial'}>
               <div className={`quality-score score-${qualityReport.overall_score >= 80 ? 'high' : qualityReport.overall_score >= 60 ? 'medium' : 'low'}`}>
                 <span className="score-number">{qualityReport.overall_score}</span>
                 <span className="score-label">/100</span>
               </div>
+              {lastRecheckAt && qualityReport.improved_resume && (
+                <p className="quality-recheck-note" role="status">
+                  Re-checked: {lastRecheckScore != null ? `${lastRecheckScore}/100` : `${qualityReport.overall_score}/100`}
+                </p>
+              )}
               <p className="impact-text">{qualityReport.estimated_impact}</p>
+              {qualityReport.quality_decreased && (
+                <div className="quality-decreased-warning">
+                  {qualityReport.after_score != null && qualityReport.before_score != null
+                    ? `This version scored ${qualityReport.after_score} (your original scored ${qualityReport.before_score}). `
+                    : 'This version scored lower than your original. '}
+                  You can keep and edit it, save to Drive, or try Auto-Improve again.
+                </div>
+              )}
+              {!qualityReport.improved_resume && (
+                <p className="quality-flow-hint">
+                  Quality Check only analyzes. Click <strong>Auto-Improve Resume</strong> below to generate an improved version, then save to Drive or update your doc.
+                </p>
+              )}
             </div>
+
+            {qualityReport.subscores && qualityReport.subscores.length > 0 && (
+              <div className="quality-section priority-section">
+                <h4>📊 Score Breakdown</h4>
+                <ul>
+                  {qualityReport.subscores.map((subscore) => (
+                    <li key={subscore.id}>
+                      <strong>{subscore.label}:</strong> {subscore.score}/100
+                      {subscore.issue_count > 0 ? ` — ${subscore.weakest_reason}` : ' — No major issues surfaced'}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {qualityReport.top_driver && qualityReport.best_next_fix && (
+              <div className="quality-section priority-section">
+                <h4>🎯 Best Next Fix</h4>
+                <p>
+                  <strong>Biggest score drag:</strong> {qualityReport.top_driver.label} ({qualityReport.top_driver.score}/100)
+                </p>
+                <p>{qualityReport.top_driver.reason}</p>
+                <p>
+                  <strong>Best next action:</strong> {qualityReport.best_next_fix.suggestion}
+                  {qualityReport.best_next_fix.expected_impact ? ` Expected impact: ${qualityReport.best_next_fix.expected_impact}.` : ''}
+                </p>
+                {qualityReport.best_next_fix.target_text && (
+                  <div className="issue-target">
+                    <strong>Affected line</strong>
+                    <div className="issue-target-text">{qualityReport.best_next_fix.target_text}</div>
+                  </div>
+                )}
+              </div>
+            )}
             
             {qualityReport.strengths && qualityReport.strengths.length > 0 && (
               <div className="quality-section strengths-section">
@@ -1228,7 +1904,7 @@ function TailorResume() {
                 <h4>📝 Issues Found ({qualityReport.issues.length})</h4>
                 <div className="issues-list">
                   {qualityReport.issues.map((issue, idx) => (
-                    <div key={idx} className={`quality-issue issue-${issue.severity}`}>
+                    <div key={issue.id || idx} className={`quality-issue issue-${issue.severity}`}>
                       <div className="issue-header">
                         <span className={`severity-badge severity-${issue.severity}`}>
                           {issue.severity.toUpperCase()}
@@ -1237,10 +1913,59 @@ function TailorResume() {
                         <span className="issue-section">{issue.section}</span>
                       </div>
                       <p className="issue-description">{issue.issue}</p>
-                      <p className="issue-suggestion">💡 {issue.suggestion}</p>
-                      {issue.example && (
-                        <p className="issue-example">📝 Example: {issue.example}</p>
+                      {issue.target_text && (
+                        <div className="issue-target">
+                          <strong>Affected line</strong>
+                          <div className="issue-target-text">{issue.target_text}</div>
+                        </div>
                       )}
+                      <p className="issue-suggestion">💡 {issue.suggestion}</p>
+                      {(issue.proposed_fix || issue.example) && (
+                        <p className="issue-example">📝 Proposed improvement: {issue.proposed_fix || issue.example}</p>
+                      )}
+                      {issue.requires_user_input && issue.blocked_reason && (
+                        <p className="question-context" style={{ marginTop: '0.5rem', whiteSpace: 'pre-line' }}>
+                          {issue.blocked_reason}
+                        </p>
+                      )}
+                      {issue.advisory_only && (
+                        <p className="question-context" style={{ marginTop: '0.5rem', whiteSpace: 'pre-line' }}>
+                          This is an optional enhancement, not a required correction. Clear ownership and outcome language can be enough even without numbers.
+                        </p>
+                      )}
+                      <div className="issue-resolution">
+                        <div className="issue-resolution-label">How should we handle this?</div>
+                        <div className="issue-resolution-actions">
+                          {['approve', 'skip', 'custom'].map((action) => (
+                            <button
+                              key={action}
+                              type="button"
+                              className={`small-button ${getIssueResolution(issue).action === action ? 'active' : ''}`}
+                              disabled={issue.requires_user_input && action === 'approve'}
+                              onClick={() => updateIssueResolution(issue.id, action)}
+                            >
+                              {action === 'approve'
+                                ? (issue.requires_user_input ? 'Needs details' : 'Use suggestion')
+                                : action === 'skip'
+                                  ? 'Skip'
+                                  : 'Custom'}
+                            </button>
+                          ))}
+                        </div>
+                        {getIssueResolution(issue).action === 'custom' && (
+                          <textarea
+                            className="question-textarea"
+                            rows={3}
+                            value={getIssueResolution(issue).custom_text}
+                            onChange={(e) => updateIssueResolution(issue.id, 'custom', e.target.value)}
+                            placeholder={
+                              issue.requires_user_input
+                                ? "Enter the real metric for this line, e.g. reduced deployment time by 40%, supported 2M daily requests, saved 6 hours/week..."
+                                : "Write the exact language direction you want us to use for this issue..."
+                            }
+                          />
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1293,11 +2018,16 @@ function TailorResume() {
             {qualityReport.improved_resume && (
               <div className="quality-section improved-section">
                 <div className="improved-header">
-                  <h4>✨ Improved Resume</h4>
+                  <h4>{qualityReport.quality_decreased ? '⚠️ Candidate Resume Draft' : '✨ Improved Resume'}</h4>
                   <p className="score-improvement">
-                    Score improved from {qualityReport.before_score} to {qualityReport.after_score}
+                    {qualityReport.quality_decreased
+                      ? `Score changed from ${qualityReport.before_score} to ${qualityReport.after_score}`
+                      : `Score improved from ${qualityReport.before_score} to ${qualityReport.after_score}`}
                     {qualityReport.metrics_added > 0 && ` (+${qualityReport.metrics_added} metrics added)`}
                   </p>
+                  {qualityReport.retried && (
+                    <p className="quality-retry-note">We ran improvement twice and kept the better result.</p>
+                  )}
                 </div>
                 
                 <div className="changes-made">
@@ -1310,6 +2040,17 @@ function TailorResume() {
                     </ul>
                   </details>
                 </div>
+
+                {qualityReport.quality_debug && (
+                  <div className="changes-made">
+                    <details>
+                      <summary><strong>Debug Details</strong></summary>
+                      <pre className="resume-preview-textarea" style={{ whiteSpace: 'pre-wrap', minHeight: '10rem' }}>
+                        {JSON.stringify(qualityReport.quality_debug, null, 2)}
+                      </pre>
+                    </details>
+                  </div>
+                )}
                 
                 {/* Resume Preview/Edit with Tabs */}
                 <div className="resume-preview-section">
@@ -1378,10 +2119,20 @@ function TailorResume() {
                     >
                       {analyzingQuality ? '🔄 Checking...' : '🔄 Re-check Quality'}
                     </button>
+                    {resumeDocId && (
+                      <button
+                        className="secondary-button"
+                        onClick={updateResumeDocInPlace}
+                        disabled={updatingDoc || savingImprovedResume || !editedImprovedResume}
+                        title="Overwrite the selected Google Doc with this improved content (PDFs: use Save to Drive)"
+                      >
+                        {updatingDoc ? '✏️ Updating...' : '✏️ Update this Google Doc'}
+                      </button>
+                    )}
                     <button
                       className="primary-button"
                       onClick={saveImprovedResumeToDrive}
-                      disabled={savingImprovedResume || !editedImprovedResume}
+                      disabled={savingImprovedResume || updatingDoc || !editedImprovedResume}
                     >
                       {savingImprovedResume ? '💾 Saving...' : '💾 Save to Google Drive'}
                     </button>
@@ -1391,21 +2142,28 @@ function TailorResume() {
             )}
             
             <div className="modal-actions">
-              {!qualityReport.improved_resume && qualityReport.issues && qualityReport.issues.length > 0 && (
+              {qualityReport.issues && qualityReport.issues.length > 0 && (
                 <button
                   className="primary-button"
                   onClick={improveResume}
                   disabled={analyzingQuality}
                 >
-                  {analyzingQuality ? 'Improving...' : '✨ Auto-Improve Resume'}
+                  {analyzingQuality
+                    ? 'Improving...'
+                    : qualityReport.improved_resume
+                      ? '✨ Re-apply Selected Fixes'
+                      : '✨ Auto-Improve Resume'}
                 </button>
               )}
               <button
                 className="secondary-button"
                 onClick={() => {
                   setShowQualityReport(false)
-                  setQualityAnswers({})  // Reset answers when closing
-                  setEditedImprovedResume('')  // Reset edited resume
+                  setQualityAnswers({})
+                  setQualityIssueResolutions({})
+                  setEditedImprovedResume('')
+                  setLastRecheckAt(null)
+                  setLastRecheckScore(null)
                 }}
               >
                 Close
@@ -1419,13 +2177,25 @@ function TailorResume() {
       {showSkillConfirmation && (
         <div className="skill-confirmation-modal">
           <div className="modal-content">
-            <h3>📋 Review Your Skills</h3>
-            <p>We've extracted skills from your resume. Please review, add any missing skills, or remove skills you no longer have.</p>
+            <h3>📋 Review Your Profile Skills</h3>
+            <p>We parsed your resume into detected skills and generated additional recommendations from your role and experience. Confirm only the skills you actually want the system to trust.</p>
+            {experienceProfile && (
+              <div className="result-item" style={{ marginBottom: '1rem' }}>
+                <strong>Profile snapshot:</strong>{' '}
+                {(experienceProfile.job_titles || []).slice(0, 3).join(', ') || 'Role not inferred'}
+                {experienceProfile.total_years != null && (
+                  <span> · {experienceProfile.total_years} years stated</span>
+                )}
+                {profileStatus?.confirmed_metrics_count != null && (
+                  <span> · {profileStatus.confirmed_metrics_count} verified metrics</span>
+                )}
+              </div>
+            )}
             
             <div className="skills-editor">
               <div className="skills-list">
-                {/* Show all unique skills from extracted and confirmed */}
-                {[...new Set([...extractedSkills, ...confirmedSkills])].map((skill, idx) => (
+                <strong>Detected From Resume</strong>
+                {[...new Set([...detectedSkillRecords.map(skill => skill.name), ...confirmedSkills])].map((skill, idx) => (
                   <label key={idx} className="skill-checkbox">
                     <input
                       type="checkbox"
@@ -1442,29 +2212,105 @@ function TailorResume() {
                   </label>
                 ))}
               </div>
+
+              {suggestedSkillRecords.length > 0 && (
+                <div className="skills-list" style={{ marginTop: '1rem' }}>
+                  <strong>Suggested Based On Role / Experience</strong>
+                  {suggestedSkillRecords.map((skill, idx) => (
+                    <label key={`${skill.name}-${idx}`} className="skill-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={confirmedSkills.includes(skill.name)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            addSkillToConfirmed(skill.name)
+                          } else {
+                            setConfirmedSkills(confirmedSkills.filter(s => s !== skill.name))
+                          }
+                        }}
+                      />
+                      <span>{skill.name}</span>
+                      {skill.reason && (
+                        <small style={{ display: 'block', color: '#666', marginLeft: '1.8rem' }}>
+                          {skill.reason}
+                        </small>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              )}
               
               <div className="add-skill-section">
                 <input
                   type="text"
                   placeholder="Add a new skill and press Enter..."
-                  onKeyPress={(e) => {
-                    if (e.key === 'Enter' && e.target.value.trim()) {
-                      const newSkill = e.target.value.trim()
-                      if (!confirmedSkills.includes(newSkill)) {
-                        setConfirmedSkills([...confirmedSkills, newSkill])
-                        // Also add to extracted skills so it shows up in the list
-                        if (!extractedSkills.includes(newSkill)) {
-                          setExtractedSkills([...extractedSkills, newSkill])
-                        }
-                      }
-                      e.target.value = ''
+                  value={skillInputValue}
+                  onChange={(e) => setSkillInputValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && skillInputValue.trim()) {
+                      addSkillToConfirmed(skillInputValue.trim())
+                      setSkillInputValue('')
+                      setSkillInputSuggestions([])
                     }
                   }}
                   className="add-skill-input"
                 />
+                {skillInputSuggestions.length > 0 && (
+                  <div className="skill-tags" style={{ marginTop: '0.5rem' }}>
+                    {skillInputSuggestions.map((suggestion) => (
+                      <button
+                        key={suggestion.name}
+                        type="button"
+                        className="skill-tag preferred"
+                        onClick={() => {
+                          addSkillToConfirmed(suggestion.name)
+                          setSkillInputValue('')
+                          setSkillInputSuggestions([])
+                        }}
+                      >
+                        + {suggestion.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <small style={{ color: '#666', marginTop: '0.25rem', display: 'block' }}>
                   Press Enter to add a skill
                 </small>
+              </div>
+
+              <div className="metrics-editor">
+                <strong>Verified Metrics</strong>
+                {verifiedMetrics.length > 0 ? (
+                  <div className="metric-tags">
+                    {verifiedMetrics.map((metric, idx) => (
+                      <span key={`${metric.normalized}-${idx}`} className="metric-tag">
+                        {metric.raw}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <small style={{ color: '#666', display: 'block', marginTop: '0.5rem' }}>
+                    No verified metrics saved yet. Add proven numbers here so authenticity checks can trust them later.
+                  </small>
+                )}
+                <textarea
+                  placeholder="Paste one or more proven metrics, e.g. Reduced costs by 35%, supported 12 services, improved latency by 120ms"
+                  value={metricInputValue}
+                  onChange={(e) => setMetricInputValue(e.target.value)}
+                  className="add-skill-input"
+                  rows={3}
+                  style={{ marginTop: '0.75rem' }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.75rem' }}>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={importMetrics}
+                    disabled={!metricInputValue.trim()}
+                  >
+                    Save Metrics
+                  </button>
+                </div>
               </div>
             </div>
             
@@ -1557,6 +2403,9 @@ function TailorResume() {
                 className="search-input"
               />
             </div>
+            <p className="helper-text" style={{ margin: '0.25rem 0 0.5rem', fontSize: '0.75rem', color: 'var(--text-muted, #6b7280)' }}>
+              Google Docs and PDFs from your Drive are listed. Word files: open in Drive → File → Open with → Google Docs first.
+            </p>
             {loadingResumes ? (
               <div className="loading-text">Loading resumes...</div>
             ) : availableResumes.length === 0 ? (
@@ -1942,16 +2791,32 @@ function TailorResume() {
             type="checkbox"
             checked={evaluateFirst}
             onChange={(e) => setEvaluateFirst(e.target.checked)}
+            disabled={isLoading || evaluateOnly}
+          />
+          Run fit check before tailoring
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={evaluateOnly}
+            onChange={(e) => {
+              const checked = e.target.checked
+              setEvaluateOnly(checked)
+              if (checked) {
+                setEvaluateFirst(true)
+                setTrackApplication(false)
+              }
+            }}
             disabled={isLoading}
           />
-          Evaluate fit before tailoring
+          Only evaluate fit
         </label>
         <label>
           <input
             type="checkbox"
             checked={trackApplication}
             onChange={(e) => setTrackApplication(e.target.checked)}
-            disabled={isLoading}
+            disabled={isLoading || evaluateOnly}
           />
           Track this application
         </label>
@@ -2026,9 +2891,9 @@ function TailorResume() {
       <button
         className="primary-button"
         onClick={handleTailor}
-        disabled={isLoading || !company || !jobTitle || (!jobUrl && !jdText.trim())}
+        disabled={isLoading || (!jobUrl && !jdText.trim())}
       >
-        {isLoading ? 'Processing...' : 'Tailor Resume'}
+        {isLoading ? 'Processing...' : evaluateOnly ? 'Evaluate Fit Only' : 'Tailor Resume'}
       </button>
 
       {/* Poor Fit Stopped Result */}
@@ -2131,7 +2996,12 @@ function TailorResume() {
 
       {result && !result.poor_fit_stopped && (
         <div className="result-container">
-          <h3>✅ Resume Tailored Successfully!</h3>
+          <h3>{result.tailored_resume || result.doc_url ? '✅ Resume Tailored Successfully!' : '✅ Fit Evaluated Successfully!'}</h3>
+          {!result.tailored_resume && !result.doc_url && result.evaluation && (
+            <div className="result-item">
+              This run evaluated job fit only. No resume draft was generated or saved.
+            </div>
+          )}
           
           {/* Fit Evaluation Warning */}
           {result.evaluation && (result.evaluation.score < 5 || !result.evaluation.should_apply) && (
@@ -2200,7 +3070,30 @@ function TailorResume() {
               </div>
             </div>
           )}
-          {result.validation && (
+          {result.review_bundle && (
+            <>
+              <div className="validation-container">
+                <div className="validation-header">
+                  <strong>🧭 Overall Review</strong>
+                  <span className={`quality-score score-${result.review_bundle.overall?.score >= 80 ? 'high' : result.review_bundle.overall?.score >= 60 ? 'medium' : 'low'}`}>
+                    Score: {result.review_bundle.overall?.score}/100
+                  </span>
+                </div>
+                <div className="result-item">
+                  {result.review_bundle.overall?.summary}
+                </div>
+                <div className="validation-recommendations">
+                  <strong>Recommendation:</strong>
+                  <div>{result.review_bundle.overall?.recommendation}</div>
+                </div>
+              </div>
+              {renderReviewSection('Authenticity', '🛡️', result.review_bundle.authenticity)}
+              {renderReviewSection('ATS Format', '📄', result.review_bundle.ats_parse)}
+              {renderReviewSection('Job Match', '🎯', result.review_bundle.job_match)}
+              {renderReviewSection('Editorial', '✍️', result.review_bundle.editorial)}
+            </>
+          )}
+          {!result.review_bundle && result.validation && (
             <div className="validation-container">
               <div className="validation-header">
                 <strong>🔍 Fabrication Check</strong>
@@ -2354,10 +3247,29 @@ function TailorResume() {
             <div className="result-item">
               <strong>🎯 Fit Score:</strong> {result.evaluation?.score ?? result.fit_score}/10
               {result.evaluation && (
-                <span style={{ marginLeft: '1rem', color: result.evaluation.should_apply ? '#4caf50' : '#f57c00' }}>
-                  {result.evaluation.should_apply ? '✅ Recommended to apply' : '⚠️ Not recommended'}
-                </span>
+                <>
+                  <span style={{ marginLeft: '1rem', color: result.evaluation.should_apply ? '#4caf50' : '#f57c00' }}>
+                    {result.evaluation.should_apply
+                      ? (result.review_bundle?.ats_parse?.score != null && result.review_bundle.ats_parse.score < 70)
+                        ? '⚠️ Fit OK but ATS format score is low — improve structure before applying'
+                        : '✅ Recommended to apply'
+                      : '⚠️ Not recommended'}
+                  </span>
+                  {result.evaluation.should_apply && result.review_bundle?.ats_parse?.score != null && result.review_bundle.ats_parse.score < 70 && (
+                    <div className="result-item" style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: '#f57c00' }}>
+                      ATS format score is {result.review_bundle.ats_parse.score}/100 (recommended 70+ for cleaner parsing). Consider simplifying structure and formatting.
+                    </div>
+                  )}
+                </>
               )}
+            </div>
+          )}
+          {result.review_bundle?.job_match && (
+            <div className="result-item">
+              <strong>🧩 Job Match Score:</strong> {result.review_bundle.job_match.score}/100
+              <span style={{ marginLeft: '1rem', color: result.review_bundle.job_match.score >= 75 ? '#4caf50' : result.review_bundle.job_match.score >= 55 ? '#f57c00' : '#d32f2f' }}>
+                {result.review_bundle.job_match.verdict}
+              </span>
             </div>
           )}
           
@@ -2378,6 +3290,53 @@ function TailorResume() {
             <div className="approval-container">
               <h3>👁️ Review & Approve Resume</h3>
               <p>Please review the tailored resume below. You can approve it, request refinements, or reject it.</p>
+
+              {lastReviewDelta && lastReviewDelta.length > 0 && (
+                <div className="validation-container">
+                  <div className="validation-header">
+                    <strong>📈 Latest Refinement Impact</strong>
+                  </div>
+                  <div className="metric-summary">
+                    {lastReviewDelta.map((change) => (
+                      <span key={change.key} style={{ color: change.delta >= 0 ? '#2e7d32' : '#c62828' }}>
+                        {change.label} {change.delta >= 0 ? '+' : ''}{change.delta}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(authenticityWarnings.issues.length > 0 || authenticityWarnings.metricFlags.length > 0) && (
+                <div className="validation-container">
+                  <div className="validation-header">
+                    <strong>🛡️ Review These Claims Before Approving</strong>
+                  </div>
+                  {authenticityWarnings.issues.length > 0 && (
+                    <div className="validation-issues">
+                      {authenticityWarnings.issues.map((issue, idx) => (
+                        <div key={`auth-${idx}`} className={`issue issue-${issue.severity}`}>
+                          <span className="issue-severity">{String(issue.severity).toUpperCase()}</span>
+                          <span className="issue-message">{issue.message}</span>
+                          {issue.evidence && (
+                            <div className="issue-suggestion">Context: {issue.evidence}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {authenticityWarnings.metricFlags.length > 0 && (
+                    <div className="metric-flagged">
+                      <strong>Suspicious numeric claims in changed content:</strong>
+                      {authenticityWarnings.metricFlags.map((metric, idx) => (
+                        <div key={`metric-${idx}`} className="metric-flagged-item">
+                          <span className="metric-raw">"{metric.raw}"</span>
+                          {metric.line && <div className="metric-line">Context: {metric.line}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               
               <div className="result-item resume-preview-container" key={`resume-preview-${result.timestamp || Date.now()}`}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
@@ -2408,13 +3367,95 @@ function TailorResume() {
                   />
                 ) : (
                   <div className="resume-preview-wrapper">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      className="resume-markdown"
-                      key={`markdown-${result.tailored_resume.substring(0, 50)}`}
-                    >
-                      {result.tailored_resume}
-                    </ReactMarkdown>
+                    {clickablePreviewSections.length > 0 && (
+                      <div className="preview-section-jumps">
+                        {clickablePreviewSections.map((section) => (
+                          <button
+                            key={section}
+                            type="button"
+                            className="preview-section-jump"
+                            onClick={() => jumpToPreviewSection(section)}
+                          >
+                            {section}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <div className="selectable-resume-preview">
+                      {clickableRefinementLines.map((line) => {
+                        if (!line.rawLine.trim()) {
+                          return <div key={line.key} className="selectable-preview-spacer" />
+                        }
+                        if (line.isHeading) {
+                          return (
+                            <div
+                              key={line.key}
+                              className="selectable-preview-heading-row"
+                              ref={(node) => {
+                                if (node) previewSectionRefs.current[line.section] = node
+                              }}
+                            >
+                              <span className="preview-section-badge">{line.section}</span>
+                              <div className="selectable-preview-heading">
+                                {line.rawLine}
+                              </div>
+                            </div>
+                          )
+                        }
+                        if (line.isSelectable) {
+                          const isSelected = refinementTargetEntry === line.text
+                          return (
+                            <div key={line.key} className="selectable-preview-line-block">
+                              <button
+                                type="button"
+                                className={`selectable-preview-line${isSelected ? ' selected' : ''}${line.isProtected ? ' locked' : ''}`}
+                                onClick={() => setRefinementTargetEntry(isSelected ? '' : line.text)}
+                              >
+                                <span className="preview-line-section-tag">{line.section}</span>
+                                <span className="preview-line-content">
+                                  {line.rawLine}
+                                  {line.isProtected && <span className="preview-line-lock">Preserved</span>}
+                                </span>
+                              </button>
+                              {isSelected && (
+                                <div className="preview-line-actions">
+                                  <button
+                                    type="button"
+                                    className="small-button"
+                                    onClick={() => handleQuickRefineEntry(line.text)}
+                                    disabled={isLoading}
+                                  >
+                                    Refine this
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={`small-button${line.isProtected ? ' active-toggle' : ''}`}
+                                    onClick={() => toggleProtectedEntry(line.text)}
+                                    disabled={isLoading}
+                                  >
+                                    {line.isProtected ? 'Unpreserve' : 'Preserve this'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="small-button"
+                                    onClick={() => handleRevertEntry(line.text)}
+                                    disabled={isLoading}
+                                  >
+                                    Revert this line
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        }
+                        return (
+                          <div key={line.key} className="selectable-preview-line static">
+                            <span className="preview-line-section-tag">{line.section}</span>
+                            {line.rawLine}
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
                 )}
               </div>
@@ -2423,7 +3464,7 @@ function TailorResume() {
                 {result.original_resume_text && (
                   <button
                     className="secondary-button"
-                    onClick={() => setShowComparison(true)}
+                    onClick={handleOpenComparison}
                     style={{ marginBottom: '1rem' }}
                   >
                     🔍 View Changes (Compare with Original)
@@ -2439,8 +3480,122 @@ function TailorResume() {
                 </button>
                 
                 <div className="refine-section">
+                  <div style={{ marginBottom: '10px' }}>
+                    <strong style={{ display: 'block', marginBottom: '6px' }}>Refine one specific line or bullet</strong>
+                    {refinementTargetEntry && (
+                      <div className="selected-preview-entry">
+                        <div style={{ marginBottom: '6px', fontSize: '0.9rem', color: '#1f4e79' }}>
+                          Selected from preview: {refinementTargetEntry.length > 140 ? `${refinementTargetEntry.slice(0, 140)}...` : refinementTargetEntry}
+                          <button
+                            type="button"
+                            className="small-button"
+                            onClick={() => setRefinementTargetEntry('')}
+                            disabled={isLoading}
+                            style={{ marginLeft: '8px' }}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                        {selectedPreviewIntent && (
+                          <div className="preview-intent-card">
+                            <div className={`preview-intent-chip tone-${selectedPreviewIntent.tone}`}>
+                              {selectedPreviewIntent.label}
+                            </div>
+                            <div className="preview-intent-reason">
+                              {selectedPreviewIntent.reason}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <select
+                      value={refinementTargetEntry}
+                      onChange={(e) => setRefinementTargetEntry(e.target.value)}
+                      disabled={isLoading}
+                      style={{ width: '100%', padding: '8px' }}
+                    >
+                      <option value="">Whole selected section(s) or full resume</option>
+                      {refinementEntryOptions.map((entry) => (
+                        <option key={entry} value={entry}>
+                          {entry.length > 140 ? `${entry.slice(0, 140)}...` : entry}
+                        </option>
+                      ))}
+                    </select>
+                    <div style={{ marginTop: '4px', fontSize: '0.9rem', opacity: 0.8 }}>
+                      If you choose a specific line, refinement rewrites only that entry.
+                    </div>
+                    {protectedEntries.length > 0 && (
+                      <div style={{ marginTop: '8px', fontSize: '0.9rem', color: '#23598c' }}>
+                        Preserved lines locked for refinement: {protectedEntries.length}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ marginBottom: '10px' }}>
+                    <strong style={{ display: 'block', marginBottom: '6px' }}>Only edit these sections</strong>
+                    <label style={{ marginRight: '12px' }}>
+                      <input
+                        type="checkbox"
+                        checked={refinementEditSections.includes('summary')}
+                        onChange={() => toggleRefinementEditSection('summary')}
+                        disabled={isLoading}
+                      />{' '}
+                      Summary
+                    </label>
+                    <label style={{ marginRight: '12px' }}>
+                      <input
+                        type="checkbox"
+                        checked={refinementEditSections.includes('experience')}
+                        onChange={() => toggleRefinementEditSection('experience')}
+                        disabled={isLoading}
+                      />{' '}
+                      Experience
+                    </label>
+                    <label style={{ marginRight: '12px' }}>
+                      <input
+                        type="checkbox"
+                        checked={refinementEditSections.includes('skills')}
+                        onChange={() => toggleRefinementEditSection('skills')}
+                        disabled={isLoading}
+                      />{' '}
+                      Skills
+                    </label>
+                    <div style={{ marginTop: '4px', fontSize: '0.9rem', opacity: 0.8 }}>
+                      Leave all unchecked to let refinement edit the whole resume.
+                    </div>
+                  </div>
+                  <div style={{ marginBottom: '10px' }}>
+                    <strong style={{ display: 'block', marginBottom: '6px' }}>Preserve exactly during refinement</strong>
+                    <label style={{ marginRight: '12px' }}>
+                      <input
+                        type="checkbox"
+                        checked={refinementPreserveSections.includes('education')}
+                        onChange={() => toggleRefinementPreserveSection('education')}
+                        disabled={isLoading}
+                      />{' '}
+                      Education
+                    </label>
+                    <label style={{ marginRight: '12px' }}>
+                      <input
+                        type="checkbox"
+                        checked={refinementPreserveSections.includes('summary')}
+                        onChange={() => toggleRefinementPreserveSection('summary')}
+                        disabled={isLoading}
+                      />{' '}
+                      Summary
+                    </label>
+                    <label style={{ marginRight: '12px' }}>
+                      <input
+                        type="checkbox"
+                        checked={refinementPreserveSections.includes('skills')}
+                        onChange={() => toggleRefinementPreserveSection('skills')}
+                        disabled={isLoading}
+                      />{' '}
+                      Skills
+                    </label>
+                  </div>
                   <textarea
-                    placeholder="Enter feedback for refinement (e.g., 'Make the summary more technical', 'Add more AWS experience')"
+                    ref={refinementTextareaRef}
+                    placeholder="Enter feedback for refinement (e.g., 'Make the experience bullets more technical', 'Tighten the summary without changing education')"
                     value={refinementFeedback}
                     onChange={(e) => setRefinementFeedback(e.target.value)}
                     disabled={isLoading}
@@ -2526,7 +3681,12 @@ function TailorResume() {
         <ResumeComparison
           original={result.original_resume_text}
           tailored={result.tailored_resume}
-          onClose={() => setShowComparison(false)}
+          baseTailored={comparisonBaseTailored || result.tailored_resume}
+          validation={result.validation}
+          reviewBundle={result.review_bundle}
+          onApplyHunk={handleApplyComparisonDraft}
+          isApplyingHunk={isApplyingComparisonHunk}
+          onClose={handleCloseComparison}
         />
       )}
     </div>

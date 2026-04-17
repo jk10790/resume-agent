@@ -5,12 +5,16 @@ Tests FastAPI endpoints with real services (mocked where appropriate).
 Run with: pytest tests/test_backend_api_integration.py -v
 """
 
+import os
 import pytest
 import json
 from unittest.mock import Mock, patch, MagicMock
 from fastapi.testclient import TestClient
 from resume_agent.services.resume_workflow import ResumeWorkflowService, TailorResumeRequest, WorkflowStep
 from resume_agent.utils.cache_tailoring import TailoringCache
+
+if not os.getenv("RUN_INTEGRATION_TESTS"):
+    pytest.skip("Skipping integration tests (set RUN_INTEGRATION_TESTS=1 to enable).", allow_module_level=True)
 
 
 @pytest.fixture

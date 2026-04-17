@@ -201,7 +201,7 @@ class TestGoogleAPIIntegration:
             drive_service, docs_service = get_services()
             return drive_service, docs_service
         except Exception as e:
-            pytest.skip(f"Google API not available: {e}")
+            pytest.skip(f"Google is session-only (web app): {e}")
     
     def test_google_drive_connection(self, google_services):
         """Test Google Drive API connection"""
@@ -259,7 +259,7 @@ class TestGoogleAPIIntegration:
         
         # Write test content
         test_content = "Integration Test Content\n\nThis is a test from the E2E integration tests."
-        write_to_google_doc(test_doc_id, test_content)
+        write_to_google_doc(test_doc_id, test_content, docs_service=docs_service)
         
         # Verify it was written
         content = read_google_doc(docs_service, test_doc_id)

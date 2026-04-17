@@ -8,6 +8,8 @@ from typing import Dict, List, Any, Optional, TYPE_CHECKING
 from ..services.llm_service import LLMService
 from ..utils.logger import logger
 from ..models.agent_models import ReviewResult, ResumeValidation, ValidationIssue
+from ..review.bundle_builder import build_review_bundle
+from ..review.ats_parse import review_ats_parse
 import json
 import re
 
@@ -37,7 +39,9 @@ class ReviewAgent:
         parsed_resume: "ParsedResume",
         analyzed_jd: "AnalyzedJD",
         fit_evaluation: "FitEvaluation",
-        ats_score: Optional["ATSScore"] = None
+        ats_score: Optional["ATSScore"] = None,
+        user_skills: Optional[List[str]] = None,
+        verified_metric_records: Optional[List[Dict[str, Any]]] = None,
     ) -> ReviewResult:
         """
         Review tailored resume and make final adjustments.
@@ -59,7 +63,9 @@ class ReviewAgent:
         validation = self._validate_resume(
             original_resume_text,
             tailored_resume_text,
-            analyzed_jd
+            analyzed_jd,
+            user_skills=user_skills,
+            verified_metric_records=verified_metric_records,
         )
         
         # If there are critical errors, attempt to fix them
@@ -85,12 +91,21 @@ class ReviewAgent:
             validation = self._validate_resume(
                 original_resume_text,
                 reviewed_resume,
-                analyzed_jd
+                analyzed_jd,
+                user_skills=user_skills,
+                verified_metric_records=verified_metric_records,
             )
         
         result = ReviewResult(
             reviewed_resume=reviewed_resume,
             validation=validation,
+            review_bundle=build_review_bundle(
+                tailored_resume=reviewed_resume,
+                validation=validation,
+                ats_score=ats_score,
+                fit_evaluation=fit_evaluation,
+                analyzed_jd=analyzed_jd,
+            ),
             changes_made=changes_made,
             final_quality_score=validation.quality_score
         )
@@ -108,7 +123,9 @@ class ReviewAgent:
         self,
         original_resume: str,
         tailored_resume: str,
-        analyzed_jd: "AnalyzedJD"
+        analyzed_jd: "AnalyzedJD",
+        user_skills: Optional[List[str]] = None,
+        verified_metric_records: Optional[List[Dict[str, Any]]] = None,
     ) -> ResumeValidation:
         """Validate resume quality using specialized validators"""
         from ..agents.resume_validator import (
@@ -119,15 +136,11 @@ class ReviewAgent:
             _validate_format_structure,
             _validate_metric_provenance,
             _basic_validation,
-            calculate_ats_score
         )
-        from ..storage.user_memory import get_skills
-        
-        # Get user's confirmed skills
-        user_skills = get_skills()
+        user_skills = list(user_skills or [])
         
         # Basic validation first
-        basic_issues = _basic_validation(tailored_resume, analyzed_jd.raw_text, original_resume)
+        basic_issues = _basic_validation(tailored_resume, analyzed_jd.raw_text, original_resume, user_skills)
         all_issues = basic_issues.copy()
         
         # Run specialized validations (these are already optimized)
@@ -152,7 +165,7 @@ class ReviewAgent:
         all_issues.extend(format_issues)
 
         metric_issues, metric_provenance = _validate_metric_provenance(
-            original_resume, tailored_resume
+            original_resume, tailored_resume, verified_metric_records=verified_metric_records
         )
         all_issues.extend(metric_issues)
         
@@ -162,8 +175,8 @@ class ReviewAgent:
         warning_count = sum(1 for issue in all_issues if issue.severity == Severity.WARNING)
         quality_score = max(0, 100 - (error_count * 20) - (warning_count * 5))
         
-        # Calculate ATS score
-        ats_score = calculate_ats_score(tailored_resume)
+        # Calculate deterministic ATS parse score for backwards-compatible validation payloads
+        ats_parse_score = review_ats_parse(tailored_resume).score
         
         # Get recommendations
         recommendations = [issue.suggestion for issue in all_issues if issue.suggestion]
@@ -186,7 +199,7 @@ class ReviewAgent:
             keyword_density=0.0,  # Could be calculated separately
             length_check=length_check,
             recommendations=recommendations,
-            ats_score=ats_score,
+            ats_score=ats_parse_score,
             metric_provenance=metric_provenance
         )
     

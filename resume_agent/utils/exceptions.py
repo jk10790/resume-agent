@@ -149,18 +149,15 @@ class GoogleAPIError(ResumeAgentError):
         """Get fix instructions based on HTTP status code"""
         if status_code == 401:
             return (
-                "1. Your Google credentials have expired.\n"
-                "2. Delete token.json and re-authenticate.\n"
-                "3. Run: python -m resume_agent.storage.google_auth"
+                "1. Your Google session expired or was revoked.\n"
+                "2. Sign in again with Google in the web app (Logout then Sign in with Google)."
             )
         elif status_code == 403:
             return (
-                "1. Check that credentials.json exists in project root.\n"
-                "2. Verify API is enabled in Google Cloud Console:\n"
+                "1. Verify API is enabled in Google Cloud Console:\n"
                 "   - Google Drive API\n"
                 "   - Google Docs API\n"
-                "3. Ensure OAuth scopes include drive and documents access.\n"
-                "4. Re-authenticate: Delete token.json and run the app again."
+                "2. Sign in with Google in the web app and ensure OAuth scopes include drive and documents."
             )
         elif status_code == 404:
             return (
@@ -182,20 +179,18 @@ class GoogleAPIError(ResumeAgentError):
         """Get generic Google API fix instructions"""
         if "credentials" in error_msg.lower() or "token" in error_msg.lower():
             return (
-                "1. Ensure credentials.json exists in project root.\n"
-                "2. Delete token.json and re-authenticate.\n"
-                "3. Run: python -m resume_agent.storage.google_auth"
+                "1. Sign in with Google in the web app.\n"
+                "2. If already signed in, log out and sign in again to refresh credentials."
             )
         elif "permission" in error_msg.lower() or "access" in error_msg.lower():
             return (
                 "1. Verify you have access to the Google Doc/Drive resource.\n"
-                "2. Check OAuth scopes include: drive, documents\n"
-                "3. Re-authenticate with proper permissions."
+                "2. Sign in with Google in the web app; OAuth scopes include drive and documents."
             )
         else:
             return (
                 "1. Check Google API status: https://status.cloud.google.com\n"
-                "2. Verify your credentials.json and token.json are valid.\n"
+                "2. Sign in with Google in the web app.\n"
                 "3. Ensure required APIs are enabled in Google Cloud Console."
             )
 

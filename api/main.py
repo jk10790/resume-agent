@@ -28,9 +28,22 @@ except (ImportError, NameError) as e:
     print(f"Warning: Failed to import MultiAgentWorkflowService: {e}", file=sys.stderr)
     MultiAgentWorkflowService = ResumeWorkflowService
 from resume_agent.services.llm_service import LLMService
-from resume_agent.storage.google_docs import get_services, read_google_doc
-from resume_agent.storage.google_drive_utils import list_google_docs, list_google_folders
+from resume_agent.storage.google_docs import read_google_doc, read_resume_file, write_to_google_doc
+from resume_agent.storage.google_drive_utils import list_google_docs, list_google_folders, get_file_metadata, GOOGLE_DOC_MIME
+from resume_agent.storage.user_context import reset_current_user, set_current_user
+from resume_agent.storage.user_store import (
+    clear_improved_resume_for_user,
+    get_improved_resume_for_user,
+    get_quality_report_for_user,
+    get_user_by_id,
+    get_user_skill_records,
+    replace_user_skill_records,
+    save_improved_resume_for_user,
+    save_quality_report_for_user,
+)
+from resume_agent.review.bundle_builder import build_review_bundle
 from resume_agent.utils.exceptions import GoogleAPIError
+from resume_agent.utils.google_ids import extract_google_doc_id
 from resume_agent.utils.logger import logger
 
 app = FastAPI(
@@ -38,6 +51,11 @@ app = FastAPI(
     version="1.0.0",
     description="AI-powered resume tailoring and job application assistant"
 )
+
+# Lightweight health check for local usage and integration tests.
+@app.get("/")
+async def root():
+    return {"ok": True, "service": "resume-agent-api"}
 
 # CORS middleware for React frontend (configurable)
 from resume_agent.config import settings
@@ -72,6 +90,21 @@ app.include_router(applications_router)
 app.include_router(google_drive_router)
 app.include_router(auth_router)
 
+
+@app.middleware("http")
+async def bind_current_user_context(request: Request, call_next):
+    """Bind authenticated session user into request-local context for storage helpers."""
+    session_payload = request.scope.get("session")
+    session_user = None
+    if isinstance(session_payload, dict):
+        session_user = session_payload.get("user_data", {}).get("local_user")
+    token = set_current_user(session_user)
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        reset_current_user(token)
+
 # Helper functions for session management
 def get_session_data(request: Request) -> Optional[Dict[str, Any]]:
     """Get current user session data"""
@@ -100,12 +133,12 @@ def clear_session(request: Request):
 # Helper function to get Google services from session or fallback
 def get_google_services_from_request(request: Request):
     """
-    Get Google services using session credentials if available, otherwise fallback to file-based.
+    Get Google services from session credentials (sign in with Google in the web app).
     
     If token is refreshed, updates session with new token and expiry.
     
     Returns:
-        Tuple of (drive_service, docs_service) or None if unavailable
+        Tuple of (drive_service, docs_service) or None if not signed in
     """
     session_data = get_session_data(request)
     session_creds = session_data.get("google_credentials") if session_data else None
@@ -140,29 +173,64 @@ def get_google_services_from_request(request: Request):
             docs_service = build('docs', 'v1', credentials=creds)
             return drive_service, docs_service
         except Exception as e:
-            logger.warning(f"Failed to use session credentials: {e}, falling back to file-based")
-    
-    # Fallback to file-based auth
-    try:
-        return get_services()
-    except Exception as e:
-        logger.warning(f"Google services not available: {e}")
+            err_str = str(e).lower()
+            if "invalid_grant" in err_str or "expired" in err_str or "revoked" in err_str:
+                # Session tokens are dead; clear session so user signs in again
+                request.session.clear()
+                logger.warning("Cleared session after expired/revoked Google token")
+                raise HTTPException(
+                    status_code=401,
+                    detail="Your Google session expired or was revoked. Please sign in again (Sign in with Google in the extension or web app).",
+                )
+            logger.warning(f"Failed to use session credentials: {e}")
         return None
+    return None
+
+
+def get_local_user_from_request(request: Request) -> Dict[str, Any]:
+    """Return the authenticated local user from the session."""
+    session_data = get_session_data(request) or {}
+    local_user = session_data.get("local_user")
+    if not local_user or not local_user.get("id"):
+        raise HTTPException(status_code=401, detail="Please sign in with Google first.")
+    return local_user
+
+
+def get_preferred_resume_doc_id(request: Request) -> Optional[str]:
+    """Get the authenticated user's persisted preferred resume id, if any."""
+    try:
+        local_user = get_local_user_from_request(request)
+    except HTTPException:
+        return None
+    fresh_user = get_user_by_id(int(local_user["id"])) or local_user
+    return extract_google_doc_id(fresh_user.get("preferred_resume_doc_id"))
 
 
 class TailorResumeAPIRequest(BaseModel):
-    """API request model for tailoring resume"""
-    company: str
-    job_title: str
+    """API request model for tailoring resume. Company and job title are optional (used for folder/doc naming when saving)."""
+    company: Optional[str] = ""
+    job_title: Optional[str] = ""
     jd_text: str
     job_url: Optional[str] = None
     evaluate_first: bool = True
+    evaluate_only: bool = False
     track_application: bool = True
     tailoring_intensity: str = "medium"  # "light", "medium", "heavy"
     sections_to_tailor: Optional[list] = None  # List of section names
     refinement_feedback: Optional[str] = None  # Feedback for refinement
+    target_entry_text: Optional[str] = None  # Specific line/bullet to refine
+    revert_target_entry: bool = False
+    protected_entry_texts: Optional[list[str]] = None  # Exact draft entries to preserve during refinement
+    preserve_sections: Optional[list[str]] = None  # Sections to preserve exactly
     resume_doc_id: Optional[str] = None  # Optional: specific resume doc ID (defaults to configured)
     save_folder_id: Optional[str] = None  # Optional: folder to save to (defaults to configured)
+
+
+class EvaluateFitRequest(BaseModel):
+    """Request for fit evaluation only (e.g. from Chrome extension)"""
+    job_url: Optional[str] = None
+    jd_text: Optional[str] = None
+    resume_doc_id: Optional[str] = None
 
 
 class ExtractJDRequest(BaseModel):
@@ -180,7 +248,18 @@ class ApprovalRequest(BaseModel):
 class RefinementRequest(BaseModel):
     """Request to refine a tailored resume"""
     approval_id: str
-    feedback: str  # What to improve
+    feedback: Optional[str] = None  # What to improve
+    sections_to_tailor: Optional[list[str]] = None  # Restrict refinement to specific sections
+    target_entry_text: Optional[str] = None  # Specific line/bullet to refine
+    revert_target_entry: bool = False
+    protected_entry_texts: Optional[list[str]] = None  # Exact current-draft lines to preserve
+    preserve_sections: Optional[list[str]] = None  # Sections to preserve exactly
+
+
+class ApprovalDraftUpdateRequest(BaseModel):
+    """Request to replace the current approval draft text after hunk-level edits."""
+    approval_id: str
+    tailored_resume: str
 
 
 class QualityAnalysisRequest(BaseModel):
@@ -189,6 +268,198 @@ class QualityAnalysisRequest(BaseModel):
     resume_text: Optional[str] = None  # Or provide text directly
     improve: bool = False  # If True, also improve the resume
     user_answers: Optional[dict] = None  # Answers to clarifying questions
+    issue_resolutions: Optional[dict] = None  # Per-issue approve/skip/custom instructions
+
+
+def serialize_evaluation(evaluation):
+    if not evaluation:
+        return None
+    return {
+        "score": evaluation.score,
+        "should_apply": evaluation.should_apply,
+        "matching_areas": evaluation.matching_areas,
+        "missing_areas": evaluation.missing_areas,
+        "recommendations": evaluation.recommendations,
+        "confidence": evaluation.confidence,
+        "reasoning": getattr(evaluation, "reasoning", None),
+    }
+
+
+def serialize_validation(validation, top_level_ats_score=None):
+    if not validation:
+        return None
+    return {
+        "quality_score": validation.quality_score,
+        "is_valid": validation.is_valid,
+        "ats_score": validation.ats_score,
+        "job_match_score": top_level_ats_score,
+        "issues": [
+            {
+                "severity": issue.severity,
+                "category": issue.category,
+                "message": issue.message,
+                "suggestion": issue.suggestion,
+            }
+            for issue in validation.issues
+        ],
+        "jd_coverage": validation.jd_coverage,
+        "recommendations": validation.recommendations,
+        "metric_provenance": validation.metric_provenance,
+    }
+
+
+def serialize_review_bundle(review_bundle):
+    if not review_bundle:
+        return None
+
+    def serialize_section(section):
+        return {
+            "score": section.score,
+            "verdict": section.verdict,
+            "summary": section.summary,
+            "issues": [
+                {
+                    "severity": issue.severity,
+                    "category": issue.category,
+                    "message": issue.message,
+                    "suggestion": issue.suggestion,
+                    "evidence": issue.evidence,
+                }
+                for issue in section.issues
+            ],
+            "recommendations": section.recommendations,
+            "metrics": section.metrics,
+        }
+
+    return {
+        "authenticity": serialize_section(review_bundle.authenticity),
+        "ats_parse": serialize_section(review_bundle.ats_parse),
+        "job_match": serialize_section(review_bundle.job_match),
+        "editorial": serialize_section(review_bundle.editorial),
+        "overall": {
+            "score": review_bundle.overall.score,
+            "verdict": review_bundle.overall.verdict,
+            "summary": review_bundle.overall.summary,
+            "recommendation": review_bundle.overall.recommendation,
+        },
+    }
+
+
+def serialize_tailor_result(result, approval_id=None):
+    return {
+        "tailored_resume": result.tailored_resume or "",
+        "original_resume_text": result.original_resume_text,
+        "evaluation": serialize_evaluation(result.evaluation),
+        "validation": serialize_validation(result.validation, result.ats_score),
+        "review_bundle": serialize_review_bundle(getattr(result, "review_bundle", None)),
+        "quality_report": result.quality_report,
+        "quality_warning": result.quality_warning,
+        "jd_requirements": result.jd_requirements,
+        "ats_score": result.ats_score,
+        "approval_required": result.approval_required,
+        "approval_status": result.approval_status,
+        "approval_id": approval_id,
+        "current_tailoring_iteration": result.current_tailoring_iteration,
+        "doc_url": result.doc_url or "",
+        "diff_path": str(result.diff_path) if result.diff_path else None,
+        "application_id": result.application_id,
+        "fit_score": result.evaluation.score if result.evaluation else None,
+        "should_apply": result.evaluation.should_apply if result.evaluation else None,
+    }
+
+
+@app.post("/api/evaluate-fit")
+async def evaluate_fit(request: EvaluateFitRequest, http_request: Request):
+    """Evaluate job fit for the current page (e.g. from Chrome extension). Returns score and recommendations."""
+    if not request.job_url and not request.jd_text:
+        raise HTTPException(status_code=400, detail="Provide job_url or jd_text")
+    try:
+        llm_service = LLMService()
+        google_services = get_google_services_from_request(http_request)
+        if not google_services:
+            raise HTTPException(
+                status_code=401,
+                detail=(
+                    "Google sign-in required. Open the Resume Agent web app in this browser, "
+                    "sign in with Google, then use the extension again (the extension uses the same session)."
+                ),
+            )
+        drive_service, docs_service = google_services
+        from resume_agent.config import settings
+        from resume_agent.utils.exceptions import GoogleAPIError
+        candidate_doc_ids = []
+        for raw_value in (
+            request.resume_doc_id,
+            get_preferred_resume_doc_id(http_request),
+            settings.resume_doc_id,
+        ):
+            normalized = extract_google_doc_id(raw_value)
+            if normalized and normalized not in candidate_doc_ids:
+                candidate_doc_ids.append(normalized)
+        if not candidate_doc_ids:
+            raise HTTPException(status_code=400, detail="No resume configured. Set RESUME_DOC_ID or pass resume_doc_id.")
+        last_google_error = None
+        resume_text = None
+        for doc_id in candidate_doc_ids:
+            try:
+                resume_text = read_resume_file(drive_service, docs_service, doc_id)
+                if resume_text:
+                    break
+            except GoogleAPIError as e:
+                last_google_error = e
+                continue
+        if not resume_text:
+            if last_google_error and ("not found" in str(last_google_error).lower() or "inaccessible" in str(last_google_error).lower()):
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "That resume file wasn't found or you don't have access. "
+                        "If you're using the extension: open the web app, sign in with Google, "
+                        "pick your resume from the app's Drive picker, then try Evaluate fit again from the extension."
+                    ),
+                )
+            if last_google_error:
+                raise last_google_error
+            raise HTTPException(status_code=400, detail="No readable resume could be loaded for fit evaluation.")
+        if request.job_url:
+            from resume_agent.agents.jd_extractor import extract_clean_jd
+            jd_text = extract_clean_jd(request.job_url, llm_service)
+        else:
+            jd_text = (request.jd_text or "").strip()
+        if not jd_text:
+            raise HTTPException(status_code=400, detail="Could not get job description from URL or jd_text.")
+        workflow = MultiAgentWorkflowService(llm_service=llm_service, google_services=google_services)
+        req = TailorResumeRequest(
+            company="",
+            job_title="",
+            jd_text=jd_text,
+            job_url=request.job_url,
+            evaluate_first=True,
+            evaluate_only=True,
+            local_user_id=(get_local_user_from_request(http_request).get("id") if get_session_data(http_request) else None),
+        )
+        result = TailorResumeResult(current_step=WorkflowStep.LOADING_RESUME, resume_text=resume_text, original_resume_text=resume_text)
+        result = workflow.execute_workflow_step(req, WorkflowStep.PARSING_RESUME, result)
+        if result.error:
+            raise HTTPException(status_code=500, detail=result.error)
+        result = workflow.execute_workflow_step(req, WorkflowStep.EVALUATING_FIT, result)
+        if result.error:
+            raise HTTPException(status_code=500, detail=result.error)
+        ev = result.evaluation
+        return {
+            "success": True,
+            "score": ev.score,
+            "should_apply": ev.should_apply,
+            "confidence": ev.confidence,
+            "matching_areas": getattr(ev, "matching_areas", []) or [],
+            "missing_areas": getattr(ev, "missing_areas", []) or [],
+            "recommendations": getattr(ev, "recommendations", []) or [],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Evaluate fit failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/extract-jd")
@@ -222,12 +493,10 @@ async def analyze_resume_quality(request: QualityAnalysisRequest, http_request: 
         resume_text = request.resume_text
         
         if not resume_text and request.resume_doc_id:
-            # Load from Google Docs
             google_services = get_google_services_from_request(http_request)
             if google_services:
-                _, docs_service = google_services
-                from resume_agent.storage.google_docs import read_google_doc
-                resume_text = read_google_doc(docs_service, request.resume_doc_id)
+                drive_service, docs_service = google_services
+                resume_text = read_resume_file(drive_service, docs_service, extract_google_doc_id(request.resume_doc_id))
         
         if not resume_text:
             raise HTTPException(status_code=400, detail="No resume text provided")
@@ -237,30 +506,36 @@ async def analyze_resume_quality(request: QualityAnalysisRequest, http_request: 
         
         # Store user answers for later realism/metric validation
         if request.user_answers:
-            from resume_agent.storage.user_memory import load_memory, save_memory
-            memory = load_memory()
-            memory["user_answers"] = request.user_answers
-            for key in ("metrics_by_role", "metrics_details", "team_size", "project_scale", "notable_achievements"):
-                value = request.user_answers.get(key)
-                if isinstance(value, str) and value.strip():
-                    memory[key] = value.strip()
-            save_memory(memory)
+            from resume_agent.storage.user_memory import save_user_metric_answers
+            save_user_metric_answers(request.user_answers)
 
         # Convert to dict for JSON response
         result = {
             "overall_score": quality_report.overall_score,
             "ats_score": quality_report.ats_score,
             "metrics_count": quality_report.metrics_count,
+            "subscores": quality_report.subscores,
+            "top_driver": quality_report.top_driver,
+            "best_next_fix": quality_report.best_next_fix,
             "issues": [
-                {
-                    "category": issue.category.value,
-                    "severity": issue.severity.value,
-                    "section": issue.section,
-                    "issue": issue.issue,
-                    "suggestion": issue.suggestion,
-                    "example": issue.example,
-                    "research_note": getattr(issue, 'research_note', None)
-                }
+                    {
+                        "id": issue.id,
+                        "category": issue.category.value,
+                        "severity": issue.severity.value,
+                        "section": issue.section,
+                        "issue": issue.issue,
+                        "suggestion": issue.suggestion,
+                        "example": issue.example,
+                        "research_note": getattr(issue, 'research_note', None),
+                        "target_text": getattr(issue, 'target_text', None),
+                        "target_entry_id": getattr(issue, 'target_entry_id', None),
+                        "requires_user_input": getattr(issue, "requires_user_input", False),
+                        "blocked_reason": getattr(issue, "blocked_reason", None),
+                        "advisory_only": getattr(issue, "advisory_only", False),
+                        "score_component": getattr(issue, "score_component", None),
+                        "impact_level": getattr(issue, "impact_level", None),
+                        "proposed_fix": getattr(issue, 'proposed_fix', None),
+                    }
                 for issue in quality_report.issues
             ],
             "strengths": quality_report.strengths,
@@ -280,41 +555,113 @@ async def analyze_resume_quality(request: QualityAnalysisRequest, http_request: 
         }
 
         # Cache the quality report for future tailoring decisions
-        from resume_agent.storage.user_memory import save_quality_report
-        save_quality_report(
-            doc_id=request.resume_doc_id or "latest",
-            report={
-                "overall_score": quality_report.overall_score,
-                "ats_score": quality_report.ats_score,
-                "metrics_count": quality_report.metrics_count,
-                "improvement_priority": quality_report.improvement_priority,
-                "estimated_impact": quality_report.estimated_impact
-            }
-        )
+        cache_doc_id = request.resume_doc_id or "latest"
+        report_payload = {
+            "overall_score": quality_report.overall_score,
+            "ats_score": quality_report.ats_score,
+            "metrics_count": quality_report.metrics_count,
+            "improvement_priority": quality_report.improvement_priority,
+            "estimated_impact": quality_report.estimated_impact
+        }
+        try:
+            local_user = get_local_user_from_request(http_request)
+            save_quality_report_for_user(int(local_user["id"]), cache_doc_id, report_payload)
+        except HTTPException:
+            from resume_agent.storage.user_memory import save_quality_report
+            save_quality_report(doc_id=cache_doc_id, report=report_payload)
         
-        # Optionally improve (using user answers if provided)
+        # Optionally improve (using user answers if provided), with auto-retry if score didn't improve
         if request.improve:
+            min_improvement = 3  # Retry if score didn't go up by at least this much
             improved = quality_agent.improve_resume(
-                resume_text, 
+                resume_text,
                 quality_report,
-                user_answers=request.user_answers
+                user_answers=request.user_answers,
+                issue_resolutions=request.issue_resolutions or {},
             )
+            if improved.after_score <= improved.before_score + min_improvement:
+                logger.info(
+                    "Improvement negligible or none, retrying once",
+                    before=improved.before_score,
+                    after=improved.after_score
+                )
+                retry_result = quality_agent.improve_resume(
+                    resume_text,
+                    quality_report,
+                    user_answers=request.user_answers,
+                    issue_resolutions=request.issue_resolutions or {},
+                )
+                if retry_result.after_score > improved.after_score:
+                    improved = retry_result
+                    result["retried"] = True
+            if improved.after_report:
+                result["overall_score"] = improved.after_report.overall_score
+                result["ats_score"] = improved.after_report.ats_score
+                result["metrics_count"] = improved.after_report.metrics_count
+                result["subscores"] = improved.after_report.subscores
+                result["top_driver"] = improved.after_report.top_driver
+                result["best_next_fix"] = improved.after_report.best_next_fix
+                result["improvement_priority"] = improved.after_report.improvement_priority
+                result["estimated_impact"] = improved.after_report.estimated_impact
+                result["issues"] = [
+                    {
+                        "id": issue.id,
+                        "category": issue.category.value,
+                        "severity": issue.severity.value,
+                        "section": issue.section,
+                        "issue": issue.issue,
+                        "suggestion": issue.suggestion,
+                        "example": issue.example,
+                        "research_note": issue.research_note,
+                        "target_text": issue.target_text,
+                        "target_entry_id": getattr(issue, "target_entry_id", None),
+                        "requires_user_input": getattr(issue, "requires_user_input", False),
+                        "blocked_reason": getattr(issue, "blocked_reason", None),
+                        "advisory_only": getattr(issue, "advisory_only", False),
+                        "score_component": getattr(issue, "score_component", None),
+                        "impact_level": getattr(issue, "impact_level", None),
+                        "proposed_fix": issue.proposed_fix,
+                    }
+                    for issue in improved.after_report.issues
+                ]
+                result["strengths"] = improved.after_report.strengths
+                result["questions"] = [
+                    {
+                        "id": q.id,
+                        "question": q.question,
+                        "context": q.context,
+                        "options": q.options,
+                        "required": q.required,
+                    }
+                    for q in improved.after_report.questions
+                ]
             result["improved_resume"] = improved.improved_text
             result["changes_made"] = improved.changes_made
             result["before_score"] = improved.before_score
             result["after_score"] = improved.after_score
             result["metrics_added"] = improved.metrics_added
-            
-            # Auto-cache the improved resume (no separate API call needed!)
-            from resume_agent.storage.user_memory import save_improved_resume
-            cache_result = save_improved_resume(
-                resume_text=improved.improved_text,
-                original_doc_id=request.resume_doc_id,
-                score=improved.after_score,
-                metadata={"changes_made": improved.changes_made}
-            )
+            result["improvement_accepted"] = improved.accepted
+            result["quality_decreased"] = improved.score_regressed
+            result["quality_debug"] = improved.diagnostics
+            try:
+                local_user = get_local_user_from_request(http_request)
+                cache_result = save_improved_resume_for_user(
+                    int(local_user["id"]),
+                    improved.improved_text,
+                    original_doc_id=request.resume_doc_id,
+                    score=improved.after_score,
+                    metadata={"changes_made": improved.changes_made}
+                )
+            except HTTPException:
+                from resume_agent.storage.user_memory import save_improved_resume
+                cache_result = save_improved_resume(
+                    resume_text=improved.improved_text,
+                    original_doc_id=request.resume_doc_id,
+                    score=improved.after_score,
+                    metadata={"changes_made": improved.changes_made}
+                )
             result["cached_version"] = cache_result.get("version", 1)
-        
+
         return result
         
     except HTTPException:
@@ -332,12 +679,15 @@ class SaveImprovedResumeRequest(BaseModel):
 
 
 @app.get("/api/cached-improved-resume")
-async def get_cached_improved_resume(doc_id: Optional[str] = None):
+async def get_cached_improved_resume(http_request: Request, doc_id: Optional[str] = None):
     """Get cached improved resume"""
     try:
-        from resume_agent.storage.user_memory import get_improved_resume
-        
-        cached = get_improved_resume(doc_id)
+        try:
+            local_user = get_local_user_from_request(http_request)
+            cached = get_improved_resume_for_user(int(local_user["id"]), doc_id)
+        except HTTPException:
+            from resume_agent.storage.user_memory import get_improved_resume
+            cached = get_improved_resume(doc_id)
         
         if not cached:
             return {"found": False, "resume": None}
@@ -359,12 +709,15 @@ async def get_cached_improved_resume(doc_id: Optional[str] = None):
 
 
 @app.delete("/api/cached-improved-resume")
-async def clear_cached_improved_resume(doc_id: Optional[str] = None):
+async def clear_cached_improved_resume(http_request: Request, doc_id: Optional[str] = None):
     """Clear cached improved resume(s)"""
     try:
-        from resume_agent.storage.user_memory import clear_improved_resume
-        
-        clear_improved_resume(doc_id)
+        try:
+            local_user = get_local_user_from_request(http_request)
+            clear_improved_resume_for_user(int(local_user["id"]), doc_id)
+        except HTTPException:
+            from resume_agent.storage.user_memory import clear_improved_resume
+            clear_improved_resume(doc_id)
         return {"success": True}
     except Exception as e:
         logger.error(f"Error clearing cached resume: {e}", exc_info=True)
@@ -496,27 +849,68 @@ async def save_improved_resume(request: SaveImprovedResumeRequest, http_request:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class UpdateResumeDocRequest(BaseModel):
+    """Request to write improved content into the selected Google Doc (in-place)"""
+    doc_id: str
+    resume_text: str
+
+
+@app.post("/api/update-resume-doc")
+async def update_resume_doc(request: UpdateResumeDocRequest, http_request: Request):
+    """Update the selected Google Doc in place with improved resume content. Only works for Google Docs (not PDFs)."""
+    try:
+        google_services = get_google_services_from_request(http_request)
+        if not google_services:
+            raise HTTPException(status_code=401, detail="Not authenticated with Google")
+        drive_service, docs_service = google_services
+        doc_id = extract_google_doc_id(request.doc_id)
+        meta = get_file_metadata(drive_service, doc_id)
+        if not meta:
+            raise HTTPException(status_code=404, detail="Document not found")
+        if meta.get("mimeType") != GOOGLE_DOC_MIME:
+            raise HTTPException(
+                status_code=400,
+                detail="Only Google Docs can be updated in place. PDFs: use Save to Google Drive to create a new Doc."
+            )
+        write_to_google_doc(doc_id, request.resume_text)
+        logger.info("Updated resume doc in place", doc_id=doc_id)
+        return {
+            "success": True,
+            "doc_id": doc_id,
+            "doc_url": f"https://docs.google.com/document/d/{doc_id}/edit"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating resume doc: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/resume/{doc_id}")
 async def get_resume_content(doc_id: str, request: Request):
     """
-    Fetch the content of a specific Google Doc resume.
+    Fetch the content of a resume file (Google Doc or PDF).
     """
     try:
         google_services = get_google_services_from_request(request)
         if not google_services:
             raise HTTPException(status_code=401, detail="Google services not available. Please authenticate with Google.")
-        
-        _, docs_service = google_services
-        resume_content = read_google_doc(docs_service, doc_id)
-        
+        drive_service, docs_service = google_services
+        doc_id = extract_google_doc_id(doc_id)
+        meta = get_file_metadata(drive_service, doc_id)
+        if not meta:
+            raise HTTPException(status_code=404, detail="Resume file not found or inaccessible.")
+        resume_content = read_resume_file(drive_service, docs_service, doc_id, meta.get("mimeType"))
         return {
             "success": True,
             "resume_content": resume_content,
-            "resume_text": resume_content  # Alias for frontend compatibility
+            "resume_text": resume_content,
         }
     except GoogleAPIError as e:
         logger.error(f"Google API error fetching resume {doc_id}: {e}", exc_info=True)
         raise HTTPException(status_code=e.status_code or 500, detail=e.message)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching resume {doc_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -528,19 +922,18 @@ async def extract_skills_from_resume(request: Request):
     try:
         body = await request.json()
         resume_text = body.get('resume_text', '').strip()
-        doc_id = body.get('doc_id')  # Optional: if provided, fetch from Google Docs
+        doc_id = extract_google_doc_id(body.get('doc_id'))  # Optional: if provided, fetch from Google Docs
         
         if not resume_text and not doc_id:
             raise HTTPException(status_code=400, detail="Either resume_text or doc_id is required")
         
-        # If doc_id provided, fetch resume content
+        # If doc_id provided, fetch resume content (Google Doc or PDF)
         if doc_id and not resume_text:
             google_services = get_google_services_from_request(request)
             if not google_services:
                 raise HTTPException(status_code=401, detail="Google services not available. Please authenticate with Google.")
-            
-            _, docs_service = google_services
-            resume_text = read_google_doc(docs_service, doc_id)
+            drive_service, docs_service = google_services
+            resume_text = read_resume_file(drive_service, docs_service, doc_id)
         
         if not resume_text:
             raise HTTPException(status_code=400, detail="Resume text is empty")
@@ -572,6 +965,76 @@ async def extract_skills_from_resume(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/user/profile/bootstrap")
+async def bootstrap_user_profile(request: Request):
+    """Parse the selected resume and create detected/suggested skill scaffolding for onboarding."""
+    try:
+        body = await request.json()
+        resume_text = body.get("resume_text", "").strip()
+        doc_id = extract_google_doc_id(body.get("doc_id"))
+
+        if not resume_text and not doc_id:
+            raise HTTPException(status_code=400, detail="Either resume_text or doc_id is required")
+
+        local_user = get_local_user_from_request(request)
+
+        if doc_id and not resume_text:
+            google_services = get_google_services_from_request(request)
+            if not google_services:
+                raise HTTPException(status_code=401, detail="Google services not available. Please authenticate with Google.")
+            drive_service, docs_service = google_services
+            resume_text = read_resume_file(drive_service, docs_service, doc_id)
+
+        if not resume_text:
+            raise HTTPException(status_code=400, detail="Resume text is empty")
+
+        llm_service = LLMService()
+        from resume_agent.agents.skill_extractor import extract_experience_info, extract_skills_from_resume
+        from resume_agent.agents.skill_recommender import build_skill_records, recommend_profile_skills
+
+        skills_result = extract_skills_from_resume(llm_service, resume_text)
+        experience_result = extract_experience_info(llm_service, resume_text)
+
+        detected_records = build_skill_records(
+            skills_result.get("categorized", {}),
+            skills_result.get("all_skills", []),
+            confidence=0.9,
+        )
+        suggested_records = recommend_profile_skills(
+            detected_skills=skills_result.get("all_skills", []),
+            confirmed_skills=[],
+            job_titles=experience_result.get("job_titles", []),
+            total_years=experience_result.get("total_years"),
+        )
+
+        replace_user_skill_records(
+            local_user["id"],
+            detected_records,
+            state="detected",
+            source="resume_parse",
+        )
+        replace_user_skill_records(
+            local_user["id"],
+            suggested_records,
+            state="suggested",
+            source="role_inference",
+        )
+
+        return {
+            "success": True,
+            "detected_skills": get_user_skill_records(local_user["id"], state="detected"),
+            "suggested_skills": get_user_skill_records(local_user["id"], state="suggested"),
+            "experience": experience_result,
+            "categorized": skills_result.get("categorized", {}),
+            "message": "Profile bootstrap complete. Review detected and suggested skills.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error bootstrapping user profile: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/tailor-resume")
 async def tailor_resume_stream(request: TailorResumeAPIRequest, http_request: Request):
     """
@@ -596,19 +1059,25 @@ async def tailor_resume_stream(request: TailorResumeAPIRequest, http_request: Re
                 google_services=google_services
             )
             
-            # Convert API request to workflow request
+            # Convert API request to workflow request (company/job_title optional; used for save folder naming)
             workflow_request = TailorResumeRequest(
-                company=request.company,
-                job_title=request.job_title,
+                company=request.company or "",
+                job_title=request.job_title or "",
                 jd_text=request.jd_text,
                 job_url=request.job_url,
-                evaluate_first=request.evaluate_first,
+                evaluate_first=request.evaluate_first or request.evaluate_only,
+                evaluate_only=request.evaluate_only,
                 track_application=request.track_application,
                 tailoring_intensity=request.tailoring_intensity,
                 sections_to_tailor=request.sections_to_tailor,
                 refinement_feedback=request.refinement_feedback,
+                target_entry_text=request.target_entry_text,
+                revert_target_entry=request.revert_target_entry,
+                protected_entry_texts=request.protected_entry_texts,
+                preserve_sections=request.preserve_sections,
                 resume_doc_id=request.resume_doc_id,
-                save_folder_id=request.save_folder_id
+                save_folder_id=request.save_folder_id,
+                local_user_id=(get_local_user_from_request(http_request).get("id") if get_session_data(http_request) else None),
             )
             
             # Define workflow steps (include fit evaluation if requested)
@@ -617,25 +1086,32 @@ async def tailor_resume_stream(request: TailorResumeAPIRequest, http_request: Re
             ]
             
             # Add parsing and fit evaluation steps if requested
-            if request.evaluate_first:
+            if request.evaluate_first or request.evaluate_only:
                 steps.extend([
                     (WorkflowStep.PARSING_RESUME, "🔍 Parsing resume and analyzing job description..."),
                     (WorkflowStep.EVALUATING_FIT, "📊 Evaluating job fit..."),
                 ])
+
+            if not request.evaluate_only:
+                validation_message = (
+                    "🔍 Validating resume quality..."
+                    if settings.tailoring_run_validation
+                    else "🔍 Checking cached resume quality..."
+                )
+                steps.extend([
+                    (WorkflowStep.TAILORING_RESUME, "✂️ Tailoring resume with AI..."),
+                    (WorkflowStep.VALIDATING_RESUME, validation_message),
+                    (WorkflowStep.PREVIEW, "👁️ Preparing preview..."),
+                ])
             
-            validation_message = (
-                "🔍 Validating resume quality..."
-                if settings.tailoring_run_validation
-                else "🔍 Checking cached resume quality..."
-            )
-            steps.extend([
-                (WorkflowStep.TAILORING_RESUME, "✂️ Tailoring resume with AI..."),
-                (WorkflowStep.VALIDATING_RESUME, validation_message),
-                (WorkflowStep.PREVIEW, "👁️ Preparing preview..."),
-            ])
-            
-            # Initialize result
+            # Initialize result and persist request metadata so approve-and-save has resume_doc_id/save_folder_id
             result = TailorResumeResult(current_step=WorkflowStep.LOADING_RESUME)
+            result.company = request.company or ""
+            result.job_title = request.job_title or ""
+            result.jd_text = request.jd_text or ""
+            result.job_url = request.job_url
+            result.resume_doc_id = request.resume_doc_id
+            result.save_folder_id = request.save_folder_id
             total_steps = len(steps)
             approval_id = None
             
@@ -698,31 +1174,7 @@ async def tailor_resume_stream(request: TailorResumeAPIRequest, http_request: Re
                         "progress": 1.0,  # Show 100% when approval is required (all tailoring steps done)
                         "step_number": total_steps,
                         "total_steps": total_steps,
-                        "result": {
-                            "tailored_resume": result.tailored_resume,
-                            "original_resume_text": result.original_resume_text,
-                            "evaluation": {
-                                "score": result.evaluation.score if result.evaluation else None,
-                                "should_apply": result.evaluation.should_apply if result.evaluation else None,
-                                "matching_areas": result.evaluation.matching_areas if result.evaluation else [],
-                                "missing_areas": result.evaluation.missing_areas if result.evaluation else [],
-                                "recommendations": result.evaluation.recommendations if result.evaluation else [],
-                                "confidence": result.evaluation.confidence if result.evaluation else None,
-                                "reasoning": result.evaluation.reasoning if result.evaluation else None
-                            } if result.evaluation else None,
-                            "validation": {
-                                "quality_score": result.validation.quality_score if result.validation else None,
-                                "ats_score": result.ats_score,
-                                "issues": [{"category": i.category, "severity": i.severity, "message": i.message, "suggestion": i.suggestion} for i in (result.validation.issues if result.validation else [])],
-                                "jd_coverage": result.validation.jd_coverage if result.validation else None,
-                                "recommendations": result.validation.recommendations if result.validation else [],
-                                "metric_provenance": result.validation.metric_provenance if result.validation else None
-                            } if result.validation else None,
-                            "quality_report": result.quality_report,
-                            "quality_warning": result.quality_warning,
-                            "jd_requirements": result.jd_requirements,
-                            "current_tailoring_iteration": result.current_tailoring_iteration
-                        }
+                        "result": serialize_tailor_result(result, approval_id)
                     }
                     yield f"data: {json.dumps(approval_data)}\n\n"
                     return  # Stop here, wait for approval
@@ -844,31 +1296,7 @@ async def tailor_resume_stream(request: TailorResumeAPIRequest, http_request: Re
                         "progress": 1.0,  # Show 100% when approval is required (all tailoring steps done)
                         "step_number": total_steps,
                         "total_steps": total_steps,
-                        "result": {
-                            "tailored_resume": result.tailored_resume,
-                            "original_resume_text": result.original_resume_text,
-                            "evaluation": {
-                                "score": result.evaluation.score if result.evaluation else None,
-                                "should_apply": result.evaluation.should_apply if result.evaluation else None,
-                                "matching_areas": result.evaluation.matching_areas if result.evaluation else [],
-                                "missing_areas": result.evaluation.missing_areas if result.evaluation else [],
-                                "recommendations": result.evaluation.recommendations if result.evaluation else [],
-                                "confidence": result.evaluation.confidence if result.evaluation else None,
-                                "reasoning": result.evaluation.reasoning if result.evaluation else None
-                            } if result.evaluation else None,
-                            "validation": {
-                                "quality_score": result.validation.quality_score if result.validation else None,
-                                "ats_score": result.ats_score,
-                                "issues": [{"category": i.category, "severity": i.severity, "message": i.message, "suggestion": i.suggestion} for i in (result.validation.issues if result.validation else [])],
-                                "jd_coverage": result.validation.jd_coverage if result.validation else None,
-                                "recommendations": result.validation.recommendations if result.validation else [],
-                                "metric_provenance": result.validation.metric_provenance if result.validation else None
-                            } if result.validation else None,
-                            "quality_report": result.quality_report,
-                            "quality_warning": result.quality_warning,
-                            "jd_requirements": result.jd_requirements,
-                            "current_tailoring_iteration": result.current_tailoring_iteration
-                        }
+                        "result": serialize_tailor_result(result, approval_id)
                     }
                     yield f"data: {json.dumps(approval_data)}\n\n"
                     return  # Stop here, wait for approval
@@ -888,7 +1316,7 @@ async def tailor_resume_stream(request: TailorResumeAPIRequest, http_request: Re
                 await asyncio.sleep(0.1)
             
             # If we got here and no approval needed, continue with saving
-            if not result.approval_required and not result.error:
+            if not result.approval_required and not result.error and not request.evaluate_only:
                 # Continue with saving steps
                 saving_steps = [
                     (WorkflowStep.SAVING_TO_GOOGLE, "💾 Saving to Google Docs..."),
@@ -970,39 +1398,7 @@ async def tailor_resume_stream(request: TailorResumeAPIRequest, http_request: Re
                 final_data = {
                     "type": "complete",
                     "llm_acknowledgment": llm_acknowledgment,
-                    "result": {
-                        "tailored_resume": result.tailored_resume or "",
-                        "doc_url": result.doc_url or "",
-                        "diff_path": str(result.diff_path) if result.diff_path else None,
-                        "application_id": result.application_id,
-                        "fit_score": result.evaluation.score if result.evaluation else None,
-                        "should_apply": result.evaluation.should_apply if result.evaluation else None,
-                        "validation": {
-                            "quality_score": result.validation.quality_score if result.validation else None,
-                            "is_valid": result.validation.is_valid if result.validation else None,
-                            "ats_score": result.validation.ats_score if result.validation else None,
-                            "issues": [
-                                {
-                                    "severity": issue.severity,
-                                    "category": issue.category,
-                                    "message": issue.message,
-                                    "suggestion": issue.suggestion
-                                }
-                                for issue in (result.validation.issues if result.validation else [])
-                            ],
-                            "jd_coverage": result.validation.jd_coverage if result.validation else {},
-                            "recommendations": result.validation.recommendations if result.validation else [],
-                            "metric_provenance": result.validation.metric_provenance if result.validation else None
-                        } if result.validation else None,
-                        "quality_report": result.quality_report,
-                        "quality_warning": result.quality_warning,
-                        "jd_requirements": result.jd_requirements,
-                        "ats_score": result.ats_score,
-                        "original_resume_text": result.original_resume_text,
-                        "approval_required": result.approval_required,
-                        "approval_status": result.approval_status,
-                        "approval_id": approval_id
-                    },
+                    "result": serialize_tailor_result(result, approval_id),
                     "timestamp": asyncio.get_event_loop().time()
                 }
                 yield f"data: {json.dumps(final_data)}\n\n"
@@ -1039,7 +1435,17 @@ async def approve_resume(request: ApprovalRequest, http_request: Request):
     """Approve or reject a tailored resume and continue workflow"""
     result = approval_storage.get(request.approval_id)
     if result is None:
-        raise HTTPException(status_code=404, detail="Approval request not found or expired")
+        logger.warning(
+            "Approval not found for approve-resume (may be expired or server was restarted)",
+            approval_id_prefix=request.approval_id[:8] if request.approval_id else None,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Approval request not found or expired. "
+                "If the server was restarted, run Tailor again and approve within the same session."
+            ),
+        )
     
     if not request.approved:
         # Rejected - remove from storage and return
@@ -1055,13 +1461,16 @@ async def approve_resume(request: ApprovalRequest, http_request: Request):
         google_services = get_google_services_from_request(http_request)
         workflow_service = MultiAgentWorkflowService(google_services=google_services)
         
-        # Create workflow request from stored result (should have company/job_title stored)
+        # Create workflow request from stored result (includes resume_doc_id/save_folder_id so save works)
         workflow_request = TailorResumeRequest(
-            company=result.company or "",  # Should be stored in result
-            job_title=result.job_title or "",  # Should be stored in result
-            jd_text=result.jd_text or "",  # Should be stored in result
+            company=result.company or "",
+            job_title=result.job_title or "",
+            jd_text=result.jd_text or "",
             job_url=result.job_url,
-            track_application=True
+            track_application=True,
+            resume_doc_id=result.resume_doc_id,
+            save_folder_id=result.save_folder_id,
+            local_user_id=(get_local_user_from_request(http_request).get("id") if get_session_data(http_request) else None),
         )
         
         # Continue with saving steps
@@ -1074,6 +1483,16 @@ async def approve_resume(request: ApprovalRequest, http_request: Request):
             if result.error:
                 break
         
+        if result.error:
+            # Save/step failed - return error so client can show it; keep approval so user can retry after fixing (e.g. re-auth)
+            err = result.error
+            if "invalid_grant" in err.lower():
+                err = (
+                    "Google sign-in has expired or was revoked. "
+                    "Please sign in again with Google (e.g. from the app or Drive picker), then try Approve and save again."
+                )
+            raise HTTPException(status_code=502, detail=err)
+        
         # Remove from storage
         approval_storage.delete(request.approval_id)
         
@@ -1085,9 +1504,17 @@ async def approve_resume(request: ApprovalRequest, http_request: Request):
                 "application_id": result.application_id
             }
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error continuing workflow after approval: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        err = str(e)
+        if "invalid_grant" in err.lower():
+            err = (
+                "Google sign-in has expired or was revoked. "
+                "Please sign in again with Google, then try Approve and save again."
+            )
+        raise HTTPException(status_code=500, detail=err)
 
 
 @app.post("/api/refine-resume")
@@ -1107,15 +1534,15 @@ async def refine_resume(request: RefinementRequest, http_request: Request):
             job_title=original_result.job_title or "",
             jd_text=original_result.jd_text or "",
             refinement_feedback=request.feedback,
+            sections_to_tailor=request.sections_to_tailor,
+            target_entry_text=request.target_entry_text,
+            revert_target_entry=request.revert_target_entry,
+            protected_entry_texts=request.protected_entry_texts,
+            preserve_sections=request.preserve_sections,
             resume_doc_id=None,  # Will use resume_text from result
-            save_folder_id=None  # Will use same folder as original
+            save_folder_id=None,  # Will use same folder as original
+            local_user_id=(get_local_user_from_request(http_request).get("id") if get_session_data(http_request) else None),
         )
-        
-        # For refinement, use the CURRENT tailored resume as the base (not original)
-        # This allows iterative refinement
-        if original_result.tailored_resume:
-            # Use tailored resume as the new base for refinement
-            original_result.resume_text = original_result.tailored_resume
         
         # Increment iteration counter
         if original_result.current_tailoring_iteration:
@@ -1148,10 +1575,32 @@ async def refine_resume(request: RefinementRequest, http_request: Request):
                     llm_service,
                     original_result.original_resume_text or original_result.resume_text or "",
                     refined_result.tailored_resume,
-                    original_result.jd_text or ""
+                    original_result.jd_text or "",
+                    user_skills=(refined_result.profile_context.confirmed_skills if getattr(refined_result, "profile_context", None) else []),
+                    verified_metric_records=(refined_result.profile_context.confirmed_metric_records if getattr(refined_result, "profile_context", None) else []),
                 )
                 refined_result.validation = validation
-                refined_result.ats_score = validation.ats_score
+                if getattr(original_result, "analyzed_jd", None) and getattr(original_result, "parsed_resume", None):
+                    try:
+                        ats_score_object = workflow_service.ats_scorer.score(
+                            refined_result.tailored_resume,
+                            original_result.analyzed_jd,
+                            original_result.parsed_resume
+                        )
+                        refined_result.ats_score_object = ats_score_object
+                        refined_result.ats_score = ats_score_object.score
+                    except Exception as ats_error:
+                        logger.warning(f"ATS scoring failed during refinement: {ats_error}")
+                        refined_result.ats_score = original_result.ats_score
+                else:
+                    refined_result.ats_score = original_result.ats_score
+                refined_result.review_bundle = build_review_bundle(
+                    tailored_resume=refined_result.tailored_resume,
+                    validation=validation,
+                    ats_score=getattr(refined_result, "ats_score_object", None) or getattr(original_result, "ats_score_object", None),
+                    fit_evaluation=original_result.evaluation,
+                    analyzed_jd=original_result.analyzed_jd,
+                )
             except Exception as e:
                 logger.warning(f"Validation failed during refinement: {e}")
                 # Continue without validation
@@ -1179,38 +1628,75 @@ async def refine_resume(request: RefinementRequest, http_request: Request):
             "message": "Resume refined successfully",
             "llm_acknowledgment": llm_acknowledgment,
             "approval_id": request.approval_id,
-            "result": {
-                "tailored_resume": refined_result.tailored_resume or "",
-                "original_resume_text": refined_result.original_resume_text,
-                "validation": {
-                    "quality_score": refined_result.validation.quality_score if refined_result.validation else None,
-                    "is_valid": refined_result.validation.is_valid if refined_result.validation else None,
-                    "ats_score": refined_result.validation.ats_score if refined_result.validation else None,
-                    "issues": [
-                        {
-                            "severity": issue.severity,
-                            "category": issue.category,
-                            "message": issue.message,
-                            "suggestion": issue.suggestion
-                        }
-                        for issue in (refined_result.validation.issues if refined_result.validation else [])
-                    ],
-                    "jd_coverage": refined_result.validation.jd_coverage if refined_result.validation else {},
-                    "recommendations": refined_result.validation.recommendations if refined_result.validation else [],
-                    "metric_provenance": refined_result.validation.metric_provenance if refined_result.validation else None
-                } if refined_result.validation else None,
-                "quality_report": refined_result.quality_report,
-                "quality_warning": refined_result.quality_warning,
-                "jd_requirements": refined_result.jd_requirements,
-                "ats_score": refined_result.ats_score,
-                "approval_required": refined_result.approval_required,
-                "approval_status": refined_result.approval_status,
-                "approval_id": request.approval_id,
-                "current_tailoring_iteration": refined_result.current_tailoring_iteration
-            }
+            "result": serialize_tailor_result(refined_result, request.approval_id)
         }
     except Exception as e:
         logger.error(f"Error refining resume: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/update-approval-draft")
+async def update_approval_draft(request: ApprovalDraftUpdateRequest, http_request: Request):
+    """Persist an edited approval draft and refresh validation/review signals."""
+    result = approval_storage.get(request.approval_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Approval request not found or expired")
+
+    try:
+        workflow_service = MultiAgentWorkflowService(google_services=get_google_services_from_request(http_request))
+        updated_text = (request.tailored_resume or "").strip()
+        if not updated_text:
+            raise HTTPException(status_code=400, detail="Tailored resume text cannot be empty")
+
+        result.tailored_resume = updated_text
+        result.approval_required = True
+        result.approval_status = "pending"
+
+        if settings.tailoring_run_validation and not result.error:
+            try:
+                from resume_agent.agents.resume_validator import validate_resume_quality
+                llm_service = LLMService()
+                validation = validate_resume_quality(
+                    llm_service,
+                    result.original_resume_text or result.resume_text or "",
+                    result.tailored_resume,
+                    result.jd_text or "",
+                    user_skills=(result.profile_context.confirmed_skills if getattr(result, "profile_context", None) else []),
+                    verified_metric_records=(result.profile_context.confirmed_metric_records if getattr(result, "profile_context", None) else []),
+                )
+                result.validation = validation
+                if getattr(result, "analyzed_jd", None) and getattr(result, "parsed_resume", None):
+                    try:
+                        ats_score_object = workflow_service.ats_scorer.score(
+                            result.tailored_resume,
+                            result.analyzed_jd,
+                            result.parsed_resume
+                        )
+                        result.ats_score_object = ats_score_object
+                        result.ats_score = ats_score_object.score
+                    except Exception as ats_error:
+                        logger.warning(f"ATS scoring failed during approval draft update: {ats_error}")
+                result.review_bundle = build_review_bundle(
+                    tailored_resume=result.tailored_resume,
+                    validation=validation,
+                    ats_score=getattr(result, "ats_score_object", None),
+                    fit_evaluation=result.evaluation,
+                    analyzed_jd=result.analyzed_jd,
+                )
+            except Exception as e:
+                logger.warning(f"Validation failed during approval draft update: {e}")
+
+        approval_storage.store(request.approval_id, result)
+        return {
+            "success": True,
+            "message": "Approval draft updated",
+            "approval_id": request.approval_id,
+            "result": serialize_tailor_result(result, request.approval_id),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating approval draft: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup">
+    <h1>Resume Agent</h1>
+    <div id="authSection" class="auth-section">
+      <span id="authStatus" class="auth-status">Checking…</span>
+      <button id="btnSignIn" class="btn signin hidden">Sign in with Google</button>
+    </div>
+    <p class="url" id="pageUrl">—</p>
+    <div class="fields">
+      <label for="inputCompany">Company</label>
+      <input type="text" id="inputCompany" placeholder="Company name">
+      <label for="inputJobTitle">Job title</label>
+      <input type="text" id="inputJobTitle" placeholder="Job title">
+    </div>
+    <div class="actions">
+      <button id="btnEvaluate" class="btn primary">Evaluate fit</button>
+      <button id="btnTailor" class="btn secondary">Tailor resume</button>
+    </div>
+    <div id="status" class="status"></div>
+    <div id="result" class="result hidden"></div>
+    <p class="footer">
+      <a id="linkOpenApp" href="#">Open full app</a>
+      <span class="footer-sep">·</span>
+      <a id="linkOptions" href="#">Settings</a>
+    </p>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

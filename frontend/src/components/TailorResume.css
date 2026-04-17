@@ -133,6 +133,14 @@
   cursor: not-allowed;
 }
 
+.small-button.active-toggle {
+  background: #2f6ca3;
+}
+
+.small-button.active-toggle:hover:not(:disabled) {
+  background: #255781;
+}
+
 .extracted-jd-preview {
   margin-top: 1rem;
   padding: 1rem;
@@ -372,6 +380,209 @@
 .resume-markdown th {
   background: #f5f5f5;
   font-weight: 600;
+}
+
+.selectable-resume-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.preview-section-jumps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #e5edf5;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: linear-gradient(180deg, #ffffff 80%, rgba(255,255,255,0.95));
+}
+
+.preview-section-jump {
+  border: 1px solid #cfe0f1;
+  background: #f5faff;
+  color: #24598d;
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.preview-section-jump:hover {
+  background: #e7f2ff;
+}
+
+.selectable-preview-heading-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.selectable-preview-heading {
+  font-weight: 700;
+  color: #1f4e79;
+  white-space: pre-wrap;
+}
+
+.preview-section-badge,
+.preview-line-section-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #eaf3ff;
+  color: #23598c;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.preview-section-badge {
+  padding: 0.25rem 0.6rem;
+  min-width: 72px;
+}
+
+.preview-line-section-tag {
+  flex-shrink: 0;
+  min-width: 78px;
+  padding: 0.18rem 0.55rem;
+  margin-right: 0.55rem;
+  margin-top: 0.05rem;
+}
+
+.selectable-preview-line {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: #f8fbff;
+  border-radius: 6px;
+  padding: 0.55rem 0.7rem;
+  color: #23313f;
+  cursor: pointer;
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  white-space: pre-wrap;
+  line-height: 1.55;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.selectable-preview-line:hover {
+  background: #eef6ff;
+  border-color: #b7d4f3;
+}
+
+.selectable-preview-line.locked {
+  border-color: #7ba6cf;
+  background: #edf5ff;
+}
+
+.selectable-preview-line.selected {
+  background: #dceeff;
+  border-color: #4f8ac9;
+  box-shadow: 0 0 0 1px rgba(79, 138, 201, 0.2);
+}
+
+.selectable-preview-line.static {
+  background: transparent;
+  border-color: transparent;
+  cursor: default;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.selectable-preview-spacer {
+  height: 0.5rem;
+}
+
+.selectable-preview-line-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.preview-line-content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.preview-line-lock {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: #dceeff;
+  color: #255781;
+  padding: 0.16rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.preview-line-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: -0.1rem 0 0.25rem 5.3rem;
+}
+
+.selected-preview-entry {
+  margin-bottom: 0.5rem;
+}
+
+.preview-intent-card {
+  border: 1px solid #dbe5ef;
+  background: #f8fbff;
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  margin-top: 0.35rem;
+}
+
+.preview-intent-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.18rem 0.58rem;
+  font-size: 0.73rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  margin-bottom: 0.35rem;
+}
+
+.preview-intent-chip.tone-keyword {
+  background: #e7f4ea;
+  color: #24613a;
+}
+
+.preview-intent-chip.tone-ats {
+  background: #eaf3ff;
+  color: #24598d;
+}
+
+.preview-intent-chip.tone-editorial {
+  background: #f3ecff;
+  color: #5b3c9d;
+}
+
+.preview-intent-chip.tone-risk {
+  background: #fff4d6;
+  color: #8a5a00;
+}
+
+.preview-intent-chip.tone-neutral {
+  background: #eef2f7;
+  color: #41566d;
+}
+
+.preview-intent-reason {
+  font-size: 0.84rem;
+  color: #51687e;
+  line-height: 1.4;
 }
 
 .resume-actions {
@@ -1016,6 +1227,32 @@
   margin-top: 1rem;
 }
 
+.metrics-editor {
+  margin-top: 1.25rem;
+  padding: 1rem;
+  background: #f7fbff;
+  border: 1px solid #d9e7f5;
+  border-radius: 6px;
+}
+
+.metric-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.metric-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.7rem;
+  background: #e8f2fc;
+  color: #1f4e79;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
 .add-skill-input {
   width: 100%;
   padding: 0.75rem;
@@ -1304,6 +1541,22 @@
   font-size: 0.95rem;
 }
 
+.quality-recheck-note {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+  color: #1976d2;
+}
+
+.quality-decreased-warning {
+  margin: 0.5rem 0 0;
+  padding: 0.75rem;
+  background: #fff3e0;
+  border-left: 4px solid #f57c00;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  color: #e65100;
+}
+
 .quality-section {
   margin-bottom: 1.5rem;
   padding: 1rem;
@@ -1414,6 +1667,28 @@
   color: #333;
 }
 
+.issue-target {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+.issue-target strong {
+  display: block;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  margin-bottom: 0.35rem;
+}
+
+.issue-target-text {
+  color: #1e293b;
+  font-size: 0.95rem;
+}
+
 .issue-suggestion {
   margin: 0.5rem 0 0;
   color: #666;
@@ -1425,6 +1700,30 @@
   color: #1565c0;
   font-size: 0.85rem;
   font-style: italic;
+}
+
+.issue-resolution {
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid #e5e7eb;
+}
+
+.issue-resolution-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #334155;
+  margin-bottom: 0.5rem;
+}
+
+.issue-resolution-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.small-button.active {
+  background: #1f77b4;
 }
 
 .improved-section {

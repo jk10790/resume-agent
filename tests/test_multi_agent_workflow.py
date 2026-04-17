@@ -204,18 +204,184 @@ class TestMultiAgentWorkflowService:
         request = TailorResumeRequest(
             company="Test Corp",
             job_title="Senior Engineer",
-            jd_text="Requirements: Python, AWS"
+            jd_text="Requirements: Python, AWS",
+            resume_doc_id="doc_123",
         )
         
-        with patch('resume_agent.services.multi_agent_workflow.read_google_doc', return_value=sample_resume_text):
-            result = service.execute_workflow_step(
-                request=request,
-                current_step=WorkflowStep.LOADING_RESUME,
-                previous_result=None
-            )
-            
-            assert result.original_resume is not None
-            assert result.error is None
+        with patch('resume_agent.services.multi_agent_workflow.read_resume_file', return_value=sample_resume_text):
+            with patch(
+                'resume_agent.services.multi_agent_workflow.get_file_metadata',
+                return_value={
+                    "id": "doc_123",
+                    "mimeType": "application/vnd.google-apps.document",
+                    "modifiedTime": "2026-04-15T10:00:00Z",
+                },
+            ):
+                result = service.execute_workflow_step(
+                    request=request,
+                    current_step=WorkflowStep.LOADING_RESUME,
+                    previous_result=None
+                )
+                
+                assert result.original_resume_text is not None
+                assert result.error is None
+                assert result.resume_source_cache_key == "drive:doc_123:application/vnd.google-apps.document:2026-04-15T10:00:00Z"
+
+    def test_parsing_step_passes_resume_source_cache_key(self, mock_llm_service, mock_google_services, sample_resume_text, sample_jd_text):
+        """Parsing step should use stable source-version cache keys when available."""
+        service = MultiAgentWorkflowService(
+            llm_service=mock_llm_service,
+            google_services=mock_google_services
+        )
+
+        request = TailorResumeRequest(
+            company="Test Corp",
+            job_title="Senior Engineer",
+            jd_text=sample_jd_text,
+            resume_doc_id="doc_123",
+        )
+
+        previous_result = TailorResumeResult(
+            current_step=WorkflowStep.PARSING_RESUME,
+            original_resume_text=sample_resume_text,
+            resume_text=sample_resume_text,
+            resume_source_cache_key="drive:doc_123:application/vnd.google-apps.document:2026-04-15T10:00:00Z",
+        )
+
+        mock_parsed = Mock(all_skills=["Python"], total_years_experience=7)
+        mock_jd = Mock(required_skills=["Python"], responsibilities=[], technologies=[])
+
+        with patch.object(service.resume_parser, "parse", return_value=mock_parsed) as parse_mock:
+            with patch.object(service.jd_analyzer, "analyze", return_value=mock_jd):
+                result = service.execute_workflow_step(
+                    request=request,
+                    current_step=WorkflowStep.PARSING_RESUME,
+                    previous_result=previous_result,
+                )
+
+        assert result.parsed_resume is mock_parsed
+        parse_mock.assert_called_once_with(
+            sample_resume_text,
+            True,
+            "drive:doc_123:application/vnd.google-apps.document:2026-04-15T10:00:00Z",
+        )
+
+    def test_tailoring_step_merges_only_selected_sections(self, mock_llm_service, mock_google_services, sample_jd_text):
+        """Targeted refinement should merge only the selected sections from the new draft."""
+        service = MultiAgentWorkflowService(
+            llm_service=mock_llm_service,
+            google_services=mock_google_services
+        )
+
+        request = TailorResumeRequest(
+            company="Test Corp",
+            job_title="Senior Engineer",
+            jd_text=sample_jd_text,
+            sections_to_tailor=["summary", "experience"],
+            refinement_feedback="Tighten the language",
+        )
+
+        previous_result = TailorResumeResult(
+            current_step=WorkflowStep.TAILORING_RESUME,
+            original_resume_text="## Summary\nOriginal summary\n\n## Experience\nOriginal experience\n\n## Skills\nOriginal skills",
+            resume_text="## Summary\nOriginal summary\n\n## Experience\nOriginal experience\n\n## Skills\nOriginal skills",
+            tailored_resume="## Summary\nCurrent draft summary\n\n## Experience\nCurrent draft experience\n\n## Skills\nCurrent draft skills",
+            parsed_resume=Mock(all_skills=["Python"], total_years_experience=7, job_titles=["Engineer"]),
+            analyzed_jd=Mock(required_skills=["Python"], preferred_skills=[], required_experience_years=5, technologies_needed=[], raw_text=sample_jd_text),
+            evaluation=Mock(score=8, should_apply=True, matching_areas=[], missing_areas=[]),
+        )
+
+        with patch.object(service.resume_tailor, "tailor", return_value="FULL TAILORED") as tailor_mock:
+            with patch.object(service.resume_humanizer, "humanize", side_effect=lambda _orig, text: text):
+                with patch.object(service.ats_scorer, "score", return_value=Mock(score=80)):
+                    with patch("resume_agent.utils.resume_parser.parse_resume_sections") as parse_mock:
+                        with patch("resume_agent.utils.resume_parser.merge_resume_sections", return_value="MERGED RESUME") as merge_mock:
+                            parse_mock.side_effect = [
+                                {"summary": Mock(name="summary"), "experience": Mock(name="experience"), "skills": Mock(name="skills")},
+                                {"summary": Mock(name="summary"), "experience": Mock(name="experience"), "skills": Mock(name="skills")},
+                            ]
+                            result = service.execute_workflow_step(
+                                request=request,
+                                current_step=WorkflowStep.TAILORING_RESUME,
+                                previous_result=previous_result,
+                            )
+
+        assert result.tailored_resume == "MERGED RESUME"
+        tailor_mock.assert_called_once()
+        merge_mock.assert_called_once()
+
+    def test_tailoring_step_can_refine_single_target_entry(self, mock_llm_service, mock_google_services, sample_jd_text):
+        service = MultiAgentWorkflowService(
+            llm_service=mock_llm_service,
+            google_services=mock_google_services
+        )
+
+        request = TailorResumeRequest(
+            company="Test Corp",
+            job_title="Senior Engineer",
+            jd_text=sample_jd_text,
+            refinement_feedback="Make this bullet more technical",
+            target_entry_text="- Current draft experience",
+        )
+
+        previous_result = TailorResumeResult(
+            current_step=WorkflowStep.TAILORING_RESUME,
+            original_resume_text="## Experience\n- Original experience",
+            resume_text="## Experience\n- Original experience",
+            tailored_resume="## Experience\n- Current draft experience",
+            parsed_resume=Mock(all_skills=["Python"], total_years_experience=7, job_titles=["Engineer"]),
+            analyzed_jd=Mock(required_skills=["Python"], preferred_skills=[], required_experience_years=5, technologies_needed=[], raw_text=sample_jd_text),
+            evaluation=Mock(score=8, should_apply=True, matching_areas=[], missing_areas=[]),
+        )
+
+        with patch.object(service.resume_tailor, "refine_single_entry", return_value="## Experience\n- Rewritten targeted experience") as refine_mock:
+            with patch.object(service.resume_humanizer, "humanize", side_effect=lambda _orig, text: text):
+                with patch.object(service.ats_scorer, "score", return_value=Mock(score=80)):
+                    result = service.execute_workflow_step(
+                        request=request,
+                        current_step=WorkflowStep.TAILORING_RESUME,
+                        previous_result=previous_result,
+                    )
+
+        assert result.tailored_resume == "## Experience\n- Rewritten targeted experience"
+        refine_mock.assert_called_once()
+
+    def test_tailoring_step_can_revert_single_target_entry(self, mock_llm_service, mock_google_services, sample_jd_text):
+        service = MultiAgentWorkflowService(
+            llm_service=mock_llm_service,
+            google_services=mock_google_services
+        )
+
+        request = TailorResumeRequest(
+            company="Test Corp",
+            job_title="Senior Engineer",
+            jd_text=sample_jd_text,
+            target_entry_text="- Current draft experience",
+            revert_target_entry=True,
+            protected_entry_texts=["- Keep this line"],
+        )
+
+        previous_result = TailorResumeResult(
+            current_step=WorkflowStep.TAILORING_RESUME,
+            original_resume_text="## Experience\n- Original experience\n- Keep this line",
+            resume_text="## Experience\n- Original experience\n- Keep this line",
+            tailored_resume="## Experience\n- Current draft experience\n- Keep this line",
+            parsed_resume=Mock(all_skills=["Python"], total_years_experience=7, job_titles=["Engineer"]),
+            analyzed_jd=Mock(required_skills=["Python"], preferred_skills=[], required_experience_years=5, technologies_needed=[], raw_text=sample_jd_text),
+            evaluation=Mock(score=8, should_apply=True, matching_areas=[], missing_areas=[]),
+        )
+
+        with patch.object(service.resume_tailor, "revert_single_entry", return_value="## Experience\n- Original experience\n- Keep this line") as revert_mock:
+            with patch.object(service.resume_humanizer, "humanize", side_effect=lambda _orig, text: text):
+                with patch.object(service.ats_scorer, "score", return_value=Mock(score=80)):
+                    result = service.execute_workflow_step(
+                        request=request,
+                        current_step=WorkflowStep.TAILORING_RESUME,
+                        previous_result=previous_result,
+                    )
+
+        assert result.tailored_resume == "## Experience\n- Original experience\n- Keep this line"
+        revert_mock.assert_called_once()
     
     def test_evaluate_fit_step(self, mock_llm_service, mock_google_services, sample_resume_text, sample_jd_text):
         """Test fit evaluation step"""
@@ -233,30 +399,38 @@ class TestMultiAgentWorkflowService:
         # Start with loaded resume
         previous_result = TailorResumeResult(
             current_step=WorkflowStep.EVALUATING_FIT,
-            original_resume=sample_resume_text
+            original_resume_text=sample_resume_text,
+            resume_text=sample_resume_text,
         )
         
-        with patch.object(service.resume_parser, 'parse', return_value=Mock(
-            all_skills=["Python", "AWS", "Kubernetes"],
-            total_experience_years=7
-        )):
-            with patch.object(service.jd_analyzer, 'analyze', return_value=Mock(
-                required_skills=["Python", "AWS"],
-                preferred_skills=["Kubernetes"],
-                min_experience_years=5
-            )):
-                with patch.object(service.fit_evaluator, 'evaluate', return_value=Mock(
-                    fit_score=8,
-                    should_apply=True,
-                    matching_skills=["Python", "AWS"],
-                    missing_required_skills=[]
-                )):
+        with patch.object(
+            service.resume_parser,
+            "parse",
+            return_value=Mock(all_skills=["Python", "AWS", "Kubernetes"], total_experience_years=7),
+        ):
+            with patch.object(
+                service.jd_analyzer,
+                "analyze",
+                return_value=Mock(required_skills=["Python", "AWS"], preferred_skills=["Kubernetes"], min_experience_years=5),
+            ):
+                with patch.object(
+                    service.fit_evaluator,
+                    "evaluate_fit",
+                    return_value=Mock(
+                        score=8,
+                        should_apply=True,
+                        matching_areas=["Python", "AWS"],
+                        missing_areas=[],
+                        recommendations=[],
+                        confidence=0.9,
+                    ),
+                ):
                     result = service.execute_workflow_step(
                         request=request,
                         current_step=WorkflowStep.EVALUATING_FIT,
-                        previous_result=previous_result
+                        previous_result=previous_result,
                     )
-                    
+
                     assert result.evaluation is not None
     
     def test_workflow_uses_progress_callback(self, mock_llm_service, mock_google_services, sample_resume_text):
@@ -273,10 +447,11 @@ class TestMultiAgentWorkflowService:
         request = TailorResumeRequest(
             company="Test Corp",
             job_title="Senior Engineer",
-            jd_text="Requirements: Python"
+            jd_text="Requirements: Python",
+            resume_doc_id="doc_123",
         )
         
-        with patch('resume_agent.services.multi_agent_workflow.read_google_doc', return_value=sample_resume_text):
+        with patch('resume_agent.services.multi_agent_workflow.read_resume_file', return_value=sample_resume_text):
             result = service.execute_workflow_step(
                 request=request,
                 current_step=WorkflowStep.LOADING_RESUME,
@@ -350,11 +525,12 @@ class TestAgentIntegration:
             fit_score=8,
             should_apply=True,
             confidence=0.85,
-            matching_skills=["Python", "AWS"],
+            matching_areas=["Python", "AWS"],
+            missing_areas=[],
+            recommendations=[],
             missing_required_skills=[],
-            experience_match="exceeds"
         )):
-            result = evaluator.evaluate(mock_resume, mock_jd)
+            result = evaluator.evaluate_fit(mock_resume, mock_jd)
             assert result is not None
 
 

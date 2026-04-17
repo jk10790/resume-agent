@@ -5,7 +5,6 @@ Helper functions for listing and searching Google Drive files and folders.
 
 from typing import List, Dict, Optional
 from googleapiclient.errors import HttpError
-from .google_auth import get_credentials
 from googleapiclient.discovery import build
 from ..utils.logger import logger
 from ..utils.exceptions import GoogleAPIError
@@ -40,16 +39,36 @@ def list_google_docs(drive_service, folder_id: Optional[str] = None, search_quer
             query_parts.append(f"name contains '{escaped_query}'")
         
         query = " and ".join(query_parts)
-        
-        # Execute query
-        results = drive_service.files().list(
-            q=query,
-            fields="files(id, name, mimeType, webViewLink, modifiedTime)",
-            orderBy="modifiedTime desc",
-            pageSize=min(max_results, 100)  # Google API max is 100
-        ).execute()
-        
+        page_size = min(max_results, 100)  # Google API max per request is 100
+
+        # Include Shared Drives so docs from team/shared drives appear
+        request_kw = {
+            "q": query,
+            "fields": "nextPageToken, files(id, name, mimeType, webViewLink, modifiedTime)",
+            "orderBy": "modifiedTime desc",
+            "pageSize": page_size,
+            "supportsAllDrives": True,
+            "includeItemsFromAllDrives": True,
+        }
+        results = drive_service.files().list(**request_kw).execute()
         files = results.get("files", [])
+        next_token = results.get("nextPageToken")
+        # If there are more and we asked for more than one page, fetch up to max_results
+        while next_token and len(files) < max_results:
+            next_results = drive_service.files().list(
+                q=query,
+                fields="nextPageToken, files(id, name, mimeType, webViewLink, modifiedTime)",
+                orderBy="modifiedTime desc",
+                pageSize=min(page_size, max_results - len(files)),
+                pageToken=next_token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            ).execute()
+            files.extend(next_results.get("files", []))
+            next_token = next_results.get("nextPageToken")
+            if not next_token:
+                break
+        files = files[:max_results]
         logger.info("Listed Google Docs", count=len(files), folder_id=folder_id, search_query=search_query)
         
         return [
@@ -69,6 +88,111 @@ def list_google_docs(drive_service, folder_id: Optional[str] = None, search_quer
         )
     except Exception as e:
         raise GoogleAPIError(f"Unexpected error listing Google Docs: {e}")
+
+
+# MIME types we support for resume listing and reading
+GOOGLE_DOC_MIME = "application/vnd.google-apps.document"
+PDF_MIME = "application/pdf"
+
+
+def get_file_metadata(drive_service, file_id: str) -> Optional[Dict[str, str]]:
+    """
+    Get metadata for a Drive file (id, name, mimeType, webViewLink).
+    Returns None if file not found or inaccessible.
+    """
+    try:
+        meta = drive_service.files().get(
+            fileId=file_id,
+            fields="id, name, mimeType, webViewLink, modifiedTime",
+            supportsAllDrives=True,
+        ).execute()
+        return {
+            "id": meta["id"],
+            "name": meta.get("name", ""),
+            "mimeType": meta.get("mimeType", ""),
+            "webViewLink": meta.get("webViewLink", ""),
+            "modifiedTime": meta.get("modifiedTime", ""),
+        }
+    except HttpError:
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to get file metadata for {file_id}: {e}")
+        return None
+
+
+def list_resume_files(
+    drive_service,
+    folder_id: Optional[str] = None,
+    search_query: Optional[str] = None,
+    max_results: int = 50,
+) -> List[Dict[str, str]]:
+    """
+    List resume-style files: Google Docs and PDFs.
+    Same return shape as list_google_docs (id, name, mimeType, webViewLink, modifiedTime).
+    """
+    try:
+        query_parts = [
+            f"(mimeType = '{GOOGLE_DOC_MIME}' or mimeType = '{PDF_MIME}')",
+            "trashed = false",
+        ]
+        if folder_id:
+            query_parts.append(f"'{folder_id}' in parents")
+        if search_query:
+            escaped = search_query.replace("\\", "\\\\").replace("'", "\\'")
+            query_parts.append(f"name contains '{escaped}'")
+
+        query = " and ".join(query_parts)
+        page_size = min(max_results, 100)
+        request_kw = {
+            "q": query,
+            "fields": "nextPageToken, files(id, name, mimeType, webViewLink, modifiedTime)",
+            "orderBy": "modifiedTime desc",
+            "pageSize": page_size,
+            "supportsAllDrives": True,
+            "includeItemsFromAllDrives": True,
+        }
+        results = drive_service.files().list(**request_kw).execute()
+        files = results.get("files", [])
+        next_token = results.get("nextPageToken")
+        while next_token and len(files) < max_results:
+            next_results = drive_service.files().list(
+                q=query,
+                fields="nextPageToken, files(id, name, mimeType, webViewLink, modifiedTime)",
+                orderBy="modifiedTime desc",
+                pageSize=min(page_size, max_results - len(files)),
+                pageToken=next_token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            ).execute()
+            files.extend(next_results.get("files", []))
+            next_token = next_results.get("nextPageToken")
+            if not next_token:
+                break
+        files = files[:max_results]
+
+        out = []
+        for f in files:
+            mime = f.get("mimeType", "")
+            if mime == GOOGLE_DOC_MIME:
+                link = f.get("webViewLink") or f"https://docs.google.com/document/d/{f['id']}"
+            else:
+                link = f.get("webViewLink") or f"https://drive.google.com/file/d/{f['id']}/view"
+            out.append({
+                "id": f["id"],
+                "name": f["name"],
+                "mimeType": mime,
+                "webViewLink": link,
+                "modifiedTime": f.get("modifiedTime", ""),
+            })
+        logger.info("Listed resume files (Docs + PDF)", count=len(out), folder_id=folder_id, search_query=search_query)
+        return out
+    except HttpError as e:
+        raise GoogleAPIError(
+            f"Failed to list resume files: {e}",
+            status_code=e.resp.status if hasattr(e, "resp") else None,
+        )
+    except Exception as e:
+        raise GoogleAPIError(f"Unexpected error listing resume files: {e}")
 
 
 def list_google_folders(drive_service, parent_folder_id: Optional[str] = None, search_query: Optional[str] = None, max_results: int = 50) -> List[Dict[str, str]]:
@@ -100,15 +224,16 @@ def list_google_folders(drive_service, parent_folder_id: Optional[str] = None, s
             query_parts.append(f"name contains '{escaped_query}'")
         
         query = " and ".join(query_parts)
-        
-        # Execute query
+
         results = drive_service.files().list(
             q=query,
             fields="files(id, name, mimeType, modifiedTime)",
             orderBy="modifiedTime desc",
-            pageSize=min(max_results, 100)
+            pageSize=min(max_results, 100),
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
         ).execute()
-        
+
         folders = results.get("files", [])
         logger.info("Listed Google folders", count=len(folders), parent_id=parent_folder_id, search_query=search_query)
         

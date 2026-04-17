@@ -10,13 +10,16 @@ from enum import Enum
 
 # Avoid circular imports by importing inside functions
 from ..services.llm_service import LLMService
-from ..storage.google_docs import get_services, read_google_doc, write_to_google_doc
+from ..storage.google_docs import read_google_doc, read_resume_file, write_to_google_doc, create_google_doc_in_folder
 from ..storage.google_drive import get_subfolder_id_for_job, copy_doc_to_folder
+from ..storage.google_drive_utils import get_file_metadata, GOOGLE_DOC_MIME
 from ..utils.diff import generate_diff_markdown
-from ..tracking.application_tracker import add_application
+from ..tracking.application_tracker import add_or_update_application
 from ..config import RESUME_DOC_ID, GOOGLE_FOLDER_ID, settings
 from ..utils.logger import logger
 from ..utils.exceptions import ResumeAgentError
+from ..review.bundle_builder import build_review_bundle
+from ..models.agent_models import UserProfileContext
 
 
 class WorkflowStep(str, Enum):
@@ -44,12 +47,18 @@ class TailorResumeRequest:
     jd_text: str
     job_url: Optional[str] = None
     evaluate_first: bool = True
+    evaluate_only: bool = False
     track_application: bool = True
     tailoring_intensity: Optional[str] = None  # "light", "medium", "heavy" - defaults to config
     sections_to_tailor: Optional[List[str]] = None  # None = all sections, [] = specific sections
     refinement_feedback: Optional[str] = None  # Feedback for iterative refinement
+    target_entry_text: Optional[str] = None  # Optional specific line/bullet to rewrite during refinement
+    revert_target_entry: bool = False  # If true, restore the targeted entry toward original wording
+    protected_entry_texts: Optional[List[str]] = None  # Exact current-draft entries to preserve during refinement
+    preserve_sections: Optional[List[str]] = None  # Sections that must remain unchanged during refinement
     resume_doc_id: Optional[str] = None  # Optional: specific resume doc ID (defaults to RESUME_DOC_ID)
     save_folder_id: Optional[str] = None  # Optional: folder to save to (defaults to GOOGLE_FOLDER_ID)
+    local_user_id: Optional[int] = None  # Optional authenticated local user id for profile-backed context
 
 
 @dataclass
@@ -62,6 +71,7 @@ class TailorResumeResult:
     application_id: Optional[int] = None
     evaluation: Optional[Any] = None  # FitEvaluation
     validation: Optional[Any] = None  # ResumeValidation
+    review_bundle: Optional[Any] = None  # ReviewBundle
     quality_report: Optional[Dict[str, Any]] = None  # Cached resume quality report
     quality_warning: Optional[Dict[str, Any]] = None  # Quality warning for UI
     jd_requirements: Optional[Dict[str, List[str]]] = None  # Extracted JD requirements
@@ -69,11 +79,13 @@ class TailorResumeResult:
     error: Optional[str] = None
     current_step: WorkflowStep = WorkflowStep.NOT_STARTED
     resume_text: Optional[str] = None  # Store intermediate result
-    # Store request metadata for approval workflow
+    # Store request metadata for approval workflow (needed for approve-and-save)
     company: Optional[str] = None
     job_title: Optional[str] = None
     jd_text: Optional[str] = None
     job_url: Optional[str] = None
+    resume_doc_id: Optional[str] = None
+    save_folder_id: Optional[str] = None
     current_tailoring_iteration: int = 1
     approval_required: bool = False
     approval_status: Optional[str] = None  # "pending", "approved", "rejected"
@@ -82,8 +94,10 @@ class TailorResumeResult:
     parsed_resume: Optional[Any] = None  # ParsedResume from ResumeParserAgent
     analyzed_jd: Optional[Any] = None  # AnalyzedJD from JDAnalyzerAgent
     ats_score_object: Optional[Any] = None  # ATSScore from ATSScorerAgent
+    profile_context: Optional[UserProfileContext] = None  # Persisted authenticated user context
     # Workflow control flags
     poor_fit_stopped: bool = False  # True if workflow stopped due to poor fit evaluation
+    resume_source_cache_key: Optional[str] = None  # Stable source-version cache key for resume parsing
 
 
 class ResumeWorkflowService:
@@ -98,14 +112,7 @@ class ResumeWorkflowService:
             google_services: Optional tuple of (drive_service, docs_service) (creates if not provided)
         """
         self.llm_service = llm_service or LLMService()
-        self.google_services = google_services
-        
-        if self.google_services is None:
-            try:
-                self.google_services = get_services()
-            except Exception as e:
-                logger.warning(f"Google services not available: {e}")
-                self.google_services = None
+        self.google_services = google_services  # Session-based only; pass from get_google_services_from_request
     
     def load_resume(self, resume_doc_id: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
         """
@@ -126,9 +133,8 @@ class ResumeWorkflowService:
             
             if not self.google_services:
                 return None, "Google services not available. Please authenticate."
-            
-            _, docs_service = self.google_services
-            resume_text = read_google_doc(docs_service, doc_id)
+            drive_service, docs_service = self.google_services
+            resume_text = read_resume_file(drive_service, docs_service, doc_id)
             
             if not resume_text:
                 return None, "Resume text is empty"
@@ -138,6 +144,23 @@ class ResumeWorkflowService:
         except Exception as e:
             logger.error(f"Failed to load resume: {e}", exc_info=True)
             return None, f"Failed to load resume: {e}"
+
+    def get_resume_source_cache_key(self, resume_doc_id: Optional[str] = None) -> Optional[str]:
+        """Build a stable source-version cache key when the resume comes from Drive."""
+        try:
+            doc_id = resume_doc_id or RESUME_DOC_ID
+            if not doc_id or not self.google_services:
+                return None
+            drive_service, _ = self.google_services
+            meta = get_file_metadata(drive_service, doc_id)
+            if not meta:
+                return None
+            modified_time = meta.get("modifiedTime") or "unknown"
+            mime_type = meta.get("mimeType") or "unknown"
+            return f"drive:{doc_id}:{mime_type}:{modified_time}"
+        except Exception as e:
+            logger.warning(f"Failed to derive resume source cache key for {resume_doc_id}: {e}")
+            return None
     
     def evaluate_fit(
         self,
@@ -195,7 +218,9 @@ class ResumeWorkflowService:
                     result.current_step = WorkflowStep.ERROR
                     return result
                 result.resume_text = resume_text
-                result.current_step = WorkflowStep.EVALUATING_FIT if request.evaluate_first else WorkflowStep.TAILORING_RESUME
+                result.resume_source_cache_key = self.get_resume_source_cache_key(request.resume_doc_id)
+                should_evaluate = request.evaluate_first or request.evaluate_only
+                result.current_step = WorkflowStep.EVALUATING_FIT if should_evaluate else WorkflowStep.TAILORING_RESUME
                 logger.info("Workflow step: Resume loaded", resume_length=len(resume_text))
                 
             elif current_step == WorkflowStep.EVALUATING_FIT:
@@ -216,7 +241,10 @@ class ResumeWorkflowService:
                         should_apply=evaluation.should_apply
                     )
                 
-                result.current_step = WorkflowStep.TAILORING_RESUME
+                if request.evaluate_only:
+                    result.current_step = WorkflowStep.COMPLETED
+                else:
+                    result.current_step = WorkflowStep.TAILORING_RESUME
                 logger.info("Workflow step: Fit evaluated", score=evaluation.score, should_apply=evaluation.should_apply)
                 
             elif current_step == WorkflowStep.TAILORING_RESUME:
@@ -230,6 +258,25 @@ class ResumeWorkflowService:
                 
                 from ..agents.resume_tailor import tailor_resume_for_job
                 from ..utils.cache_tailoring import TailoringCache
+                from ..utils.agent_cache import get_agent_cache
+                
+                # Exact cache: same resume + same job → return cached result, no LLM call
+                agent_cache = get_agent_cache()
+                cached_tailored = agent_cache.get_tailored_result(
+                    result.resume_text,
+                    request.jd_text,
+                    intensity=intensity,
+                    refinement_feedback=request.refinement_feedback,
+                    sections_to_tailor=request.sections_to_tailor,
+                    current_draft_text=(result.tailored_resume if request.refinement_feedback else None),
+                )
+                if cached_tailored is not None:
+                    result.tailored_resume = cached_tailored
+                    if not result.original_resume_text:
+                        result.original_resume_text = result.resume_text
+                    result.current_step = WorkflowStep.VALIDATING_RESUME
+                    logger.info("Workflow step: Resume tailored (from cache)", tailored_length=len(cached_tailored))
+                    return result
                 
                 # Check cache for similar patterns (if we have JD requirements from previous step)
                 jd_requirements = result.jd_requirements or {}
@@ -293,6 +340,16 @@ class ResumeWorkflowService:
                 # Only set original_resume_text if not already set (preserve first original for comparison)
                 if not result.original_resume_text:
                     result.original_resume_text = result.resume_text
+                # Cache so repeat tailor for same resume + same job skips LLM
+                    agent_cache.set_tailored_result(
+                        result.resume_text,
+                        request.jd_text,
+                        tailored_resume,
+                        intensity=intensity,
+                        refinement_feedback=request.refinement_feedback,
+                        sections_to_tailor=request.sections_to_tailor,
+                        current_draft_text=(result.tailored_resume if request.refinement_feedback else None),
+                    )
                 result.current_step = WorkflowStep.VALIDATING_RESUME
                 logger.info("Workflow step: Resume tailored", tailored_length=len(tailored_resume))
                 
@@ -318,7 +375,11 @@ class ResumeWorkflowService:
                         request.jd_text
                     )
                     result.validation = validation
-                    result.ats_score = validation.ats_score
+                    result.review_bundle = build_review_bundle(
+                        tailored_resume=result.tailored_resume,
+                        validation=validation,
+                        fit_evaluation=result.evaluation,
+                    )
                     
                     # Cache the tailoring pattern if quality is good
                     if validation.quality_score >= 70:
@@ -399,7 +460,11 @@ class ResumeWorkflowService:
                                 # Update validation if fixed version is better
                                 if fixed_validation.quality_score > validation.quality_score:
                                     result.validation = fixed_validation
-                                    result.ats_score = fixed_validation.ats_score
+                                    result.review_bundle = build_review_bundle(
+                                        tailored_resume=fixed_resume,
+                                        validation=fixed_validation,
+                                        fit_evaluation=result.evaluation,
+                                    )
                                     logger.info(f"Fixed resume has better quality score: {fixed_validation.quality_score} > {validation.quality_score}")
                             except Exception as e:
                                 logger.warning(f"Failed to re-validate fixed resume: {e}")
@@ -451,23 +516,30 @@ class ResumeWorkflowService:
                     result.error = "Save folder ID not provided and GOOGLE_FOLDER_ID not configured"
                     result.current_step = WorkflowStep.ERROR
                     return result
-                
-                # Create subfolder for this job
-                subfolder_id = get_subfolder_id_for_job(base_folder_id, request.job_title, request.company)
-                
-                # Use the original resume doc ID (or configured default) as template
-                source_doc_id = request.resume_doc_id or RESUME_DOC_ID
-                if not source_doc_id:
+                source_file_id = request.resume_doc_id or RESUME_DOC_ID
+                if not source_file_id:
                     result.error = "Source resume document ID not available for copying"
                     result.current_step = WorkflowStep.ERROR
                     return result
-                
-                tailored_doc_id = copy_doc_to_folder(
-                    source_doc_id,
-                    subfolder_id,
-                    f"{request.job_title}_Tailored"
-                )
-                write_to_google_doc(tailored_doc_id, result.tailored_resume)
+                # Fallback for optional company/job title (folder and doc naming only)
+                job_display = (request.job_title or "").strip() or "Job_Application"
+                company_display = (request.company or "").strip() or "Application"
+                drive_service, docs_service = self.google_services
+                subfolder_id = get_subfolder_id_for_job(base_folder_id, job_display, company_display, drive_service=drive_service)
+                doc_name = f"{job_display}_Tailored"
+                meta = get_file_metadata(drive_service, source_file_id)
+                if meta and meta.get("mimeType") == GOOGLE_DOC_MIME:
+                    tailored_doc_id = copy_doc_to_folder(
+                        source_file_id,
+                        subfolder_id,
+                        doc_name,
+                        drive_service=drive_service,
+                    )
+                    write_to_google_doc(tailored_doc_id, result.tailored_resume, docs_service=docs_service)
+                else:
+                    tailored_doc_id = create_google_doc_in_folder(
+                        drive_service, subfolder_id, doc_name, result.tailored_resume, docs_service=docs_service
+                    )
                 result.tailored_doc_id = tailored_doc_id
                 result.doc_url = f"https://docs.google.com/document/d/{tailored_doc_id}"
                 result.current_step = WorkflowStep.GENERATING_DIFF
@@ -497,12 +569,14 @@ class ResumeWorkflowService:
                         result.evaluation = self.evaluate_fit(result.resume_text, request.jd_text)
                 
                 if result.evaluation:
-                    application_id = add_application(
-                        job_title=request.job_title,
-                        company=request.company,
+                    job_title = (request.job_title or "").strip() or "Job Application"
+                    company = (request.company or "").strip() or "Unknown"
+                    application_id = add_or_update_application(
+                        job_title=job_title,
+                        company=company,
                         job_url=request.job_url or "",
                         fit_score=result.evaluation.score,
-                        resume_doc_id=result.tailored_doc_id
+                        resume_doc_id=result.tailored_doc_id,
                     )
                     result.application_id = application_id
                 result.current_step = WorkflowStep.COMPLETED
@@ -589,18 +663,29 @@ class ResumeWorkflowService:
         
         try:
             drive_service, docs_service = self.google_services
-            logger.info("Getting subfolder for job", company=request.company, job_title=request.job_title)
-            subfolder_id = get_subfolder_id_for_job(GOOGLE_FOLDER_ID, request.job_title, request.company)
-            
-            logger.info("Copying document to folder", subfolder_id=subfolder_id)
-            tailored_doc_id = copy_doc_to_folder(
-                RESUME_DOC_ID,
-                subfolder_id,
-                f"{request.job_title}_Tailored"
-            )
-            
-            logger.info("Writing tailored resume to Google Doc", doc_id=tailored_doc_id)
-            write_to_google_doc(tailored_doc_id, tailored_resume)
+            base_folder_id = request.save_folder_id or GOOGLE_FOLDER_ID
+            job_display = (request.job_title or "").strip() or "Job_Application"
+            company_display = (request.company or "").strip() or "Application"
+            logger.info("Getting subfolder for job", company=company_display, job_title=job_display)
+            subfolder_id = get_subfolder_id_for_job(base_folder_id, job_display, company_display, drive_service=drive_service)
+            source_file_id = request.resume_doc_id or RESUME_DOC_ID
+            doc_name = f"{job_display}_Tailored"
+            meta = get_file_metadata(drive_service, source_file_id) if source_file_id else None
+            if meta and meta.get("mimeType") == GOOGLE_DOC_MIME:
+                logger.info("Copying document to folder", subfolder_id=subfolder_id)
+                tailored_doc_id = copy_doc_to_folder(
+                    source_file_id,
+                    subfolder_id,
+                    doc_name,
+                    drive_service=drive_service,
+                )
+                logger.info("Writing tailored resume to Google Doc", doc_id=tailored_doc_id)
+                write_to_google_doc(tailored_doc_id, tailored_resume, docs_service=docs_service)
+            else:
+                logger.info("Creating new Google Doc in folder (PDF or unknown source)", subfolder_id=subfolder_id)
+                tailored_doc_id = create_google_doc_in_folder(
+                    drive_service, subfolder_id, doc_name, tailored_resume, docs_service=docs_service
+                )
             logger.info("Successfully saved to Google Docs", doc_id=tailored_doc_id)
             
             doc_url = f"https://docs.google.com/document/d/{tailored_doc_id}"
@@ -613,20 +698,21 @@ class ResumeWorkflowService:
             except Exception as e:
                 logger.warning(f"Failed to generate diff: {e}")
             
-            # Step 6: Track application (optional)
+            # Step 6: Track application (optional); same company+role updates existing record
             application_id = None
             if request.track_application:
                 try:
                     # Get evaluation if we didn't already do it
                     if evaluation is None:
                         evaluation = self.evaluate_fit(resume_text, request.jd_text)
-                    
-                    application_id = add_application(
-                        job_title=request.job_title,
-                        company=request.company,
+                    job_title = (request.job_title or "").strip() or "Job Application"
+                    company = (request.company or "").strip() or "Unknown"
+                    application_id = add_or_update_application(
+                        job_title=job_title,
+                        company=company,
                         job_url=request.job_url or "",
                         fit_score=evaluation.score,
-                        resume_doc_id=tailored_doc_id
+                        resume_doc_id=tailored_doc_id,
                     )
                     logger.info("Application tracked", application_id=application_id)
                 except Exception as e:

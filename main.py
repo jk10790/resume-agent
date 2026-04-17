@@ -15,7 +15,7 @@ from resume_agent.config import RESUME_DOC_ID, GOOGLE_FOLDER_ID, settings
 from resume_agent.agents.resume_tailor import tailor_resume_for_job
 from resume_agent.agents.fit_evaluator import evaluate_resume_fit
 from resume_agent.agents.jd_extractor import extract_clean_jd
-from resume_agent.storage.google_docs import get_services, read_google_doc, write_to_google_doc
+from resume_agent.storage.google_docs import read_google_doc, write_to_google_doc
 from resume_agent.storage.google_drive import get_subfolder_id_for_job, copy_doc_to_folder
 from resume_agent.utils.diff import generate_diff_markdown
 from resume_agent.tracking.application_tracker import (
@@ -34,6 +34,12 @@ from rich.table import Table
 
 console = Console()
 
+def _require_google_services():
+    """Google Drive/Docs require the web app (sign in with Google). CLI cannot use file-based auth."""
+    console.print("[yellow]Google Drive/Docs are available only via the web app.[/yellow]")
+    console.print("Sign in with Google at the Resume Agent web app to tailor, save, and use Drive.")
+    raise SystemExit(1)
+
 def cmd_evaluate(args):
     """Evaluate resume fit for a job."""
     logger.info("Starting fit evaluation")
@@ -42,7 +48,11 @@ def cmd_evaluate(args):
     try:
         with track_operation("Initializing services"):
             llm_service = LLMService()  # Uses provider from settings
-            _, docs_service = get_services()
+            try:
+                from resume_agent.storage.google_docs import get_services
+                _, docs_service = get_services()
+            except Exception:
+                _require_google_services()
         
         # Load resume
         with track_operation("Loading resume from Google Docs"):
@@ -87,7 +97,11 @@ def cmd_tailor(args):
     try:
         with track_operation("Initializing services"):
             llm_service = LLMService()  # Uses provider from settings
-            _, docs_service = get_services()
+            try:
+                from resume_agent.storage.google_docs import get_services
+                _, docs_service = get_services()
+            except Exception:
+                _require_google_services()
             version_service = ResumeVersionService()
         
         # Get job details
@@ -190,7 +204,11 @@ def cmd_apply(args):
     print("🚀 Starting full application workflow...\n")
     
     llm_service = LLMService()  # Uses provider from settings
-    _, docs_service = get_services()
+    try:
+        from resume_agent.storage.google_docs import get_services
+        _, docs_service = get_services()
+    except Exception:
+        _require_google_services()
     
     # Get JD
     if args.url:

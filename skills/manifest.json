@@ -1,0 +1,53 @@
+{
+  "skills": [
+    {
+      "id": "extract_jd",
+      "name": "Extract job description",
+      "description": "Extracts and cleans the job description from raw scraped web text or URL. Use when the user provides a job URL or pastes messy job listing text.",
+      "instruction_path": "skills/extract_jd/SKILL.md",
+      "model_hint": "haiku"
+    },
+    {
+      "id": "tailor_resume",
+      "name": "Tailor resume",
+      "description": "Tailors the candidate's resume to a specific job description while preserving facts and voice. Use when the user wants to tailor their resume for a job.",
+      "instruction_path": "skills/tailor_resume/SKILL.md",
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "tailor_resume_light",
+      "name": "Tailor resume (light)",
+      "description": "Minimal, targeted improvements to a resume for a job. Use when the user wants light tailoring only.",
+      "instruction_path": "skills/tailor_resume/SKILL_light.md",
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "tailor_resume_medium",
+      "name": "Tailor resume (medium)",
+      "description": "Moderate tailoring of a resume for a job. Use when the user wants medium tailoring.",
+      "instruction_path": "skills/tailor_resume/SKILL_medium.md",
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "tailor_resume_heavy",
+      "name": "Tailor resume (heavy)",
+      "description": "Comprehensive tailoring of a resume for a job. Use when the user wants heavy tailoring.",
+      "instruction_path": "skills/tailor_resume/SKILL_heavy.md",
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "evaluate_fit",
+      "name": "Evaluate job fit",
+      "description": "Evaluates how well a resume matches a job description. Use when the user wants a fit score and recommendations.",
+      "instruction_path": "skills/evaluate_fit/SKILL.md",
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "improve_quality",
+      "name": "Improve resume quality",
+      "description": "Applies specific content improvements to a resume. Use when the user has a list of improvements to apply.",
+      "instruction_path": "skills/improve_quality/SKILL.md",
+      "model_hint": "sonnet"
+    }
+  ]
+}
