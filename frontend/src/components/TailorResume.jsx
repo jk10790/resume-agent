@@ -5,6 +5,29 @@ import ResumeComparison, { diffLines } from './ResumeComparison'
 import FeedbackLearner from './FeedbackLearner'
 import './TailorResume.css'
 
+const ARCHETYPE_OPTIONS = [
+  { value: 'software_engineering', label: 'Software / Product Engineering' },
+  { value: 'platform_infrastructure', label: 'Platform / Infrastructure / SRE' },
+  { value: 'data_ml_ai', label: 'Data / ML / AI Engineering' },
+  { value: 'applied_ai_llmops', label: 'Applied AI / LLMOps / Agentic Systems' },
+  { value: 'product_technical_product', label: 'Product / Technical Product' },
+  { value: 'solutions_customer_engineering', label: 'Solutions / Customer / Sales Engineering' },
+]
+
+function archetypeDisplayLabel(value) {
+  return ARCHETYPE_OPTIONS.find((option) => option.value === value)?.label || value || 'General'
+}
+
+function formatEvidencePreviewItem(item) {
+  if (!item) return ''
+  if (typeof item === 'string') return item
+  const requirement = item.requirement ? String(item.requirement).trim() : ''
+  const evidence = item.evidence ? String(item.evidence).trim() : ''
+  const sourceSection = item.source_section ? String(item.source_section).trim() : ''
+  if (requirement && evidence) return `${requirement}: ${evidence}${sourceSection ? ` (${sourceSection})` : ''}`
+  return requirement || evidence || sourceSection || ''
+}
+
 function normalizeSectionLabel(line) {
   const trimmed = (line || '').trim()
   if (!trimmed) return null
@@ -23,6 +46,7 @@ function buildReviewDelta(previousBundle, nextBundle) {
     ['authenticity', 'Authenticity'],
     ['ats_parse', 'ATS Format'],
     ['job_match', 'Job Match'],
+    ['strategy_alignment', 'Strategy Alignment'],
     ['editorial', 'Editorial'],
   ]
   const changes = sections
@@ -114,7 +138,127 @@ function inferPreviewIntent(entryText, reviewBundle, validation) {
   }
 }
 
-function TailorResume() {
+function getProgressState(progress, approvalRequired, result) {
+  if (!progress) return { mode: 'running', label: '' }
+  if (approvalRequired && result?.approval_stage === 'strategy') {
+    return {
+      mode: 'checkpoint',
+      label: 'Strategy ready for review',
+      detail: 'Step complete. Review the strategy brief below to continue.',
+    }
+  }
+  if (approvalRequired && result?.approval_stage === 'final_resume') {
+    return {
+      mode: 'checkpoint',
+      label: 'Draft ready for final review',
+      detail: 'Step complete. Review the draft below before approving and saving.',
+    }
+  }
+  if (progress.progress >= 1) {
+    return {
+      mode: 'complete',
+      label: 'Step complete',
+      detail: progress.message,
+    }
+  }
+  return { mode: 'running', label: progress.message, detail: '' }
+}
+
+function isStrategyReadyForDraft(strategyBrief) {
+  return ['approved', 'override_approved'].includes(strategyBrief?.approval_status)
+}
+
+function formatStrategyEventType(eventType) {
+  const labels = {
+    strategy_brief_review_requested: 'Strategy ready for review',
+    strategy_approved: 'Strategy approved',
+    strategy_override_approved: 'Weak-fit override approved',
+    strategy_tailored: 'Draft generated',
+    strategy_section_regenerated: 'Strategy section refreshed',
+    strategy_duplicated: 'Strategy duplicated',
+    strategy_rebaselined: 'Strategy rebaselined',
+    final_resume_approved: 'Final resume approved',
+    final_resume_saved: 'Final resume saved',
+  }
+  return labels[eventType] || String(eventType || 'strategy_event').replace(/_/g, ' ')
+}
+
+function summarizeDirectiveTrace(trace = []) {
+  const counts = trace.reduce((acc, item) => {
+    const status = item?.status || 'unknown'
+    acc[status] = (acc[status] || 0) + 1
+    return acc
+  }, {})
+  return {
+    applied: counts.applied || 0,
+    underrepresented: counts.underrepresented || 0,
+    skippedDisabled: counts.skipped_disabled || 0,
+  }
+}
+
+function computeJdDrift(savedJdText, currentJdText) {
+  const normalize = (text) =>
+    new Set(
+      String(text || '')
+        .toLowerCase()
+        .split(/[^a-z0-9+#.]+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length > 3)
+    )
+  const saved = normalize(savedJdText)
+  const current = normalize(currentJdText)
+  if (!saved.size || !current.size) return null
+  const overlap = [...saved].filter((token) => current.has(token)).length
+  const similarity = overlap / Math.max(saved.size, current.size)
+  return {
+    similarity,
+    isStale: similarity < 0.55,
+    isModified: similarity < 0.9,
+  }
+}
+
+function describeStrategyEvent(event) {
+  const payload = event?.payload || {}
+  switch (event?.event_type) {
+    case 'strategy_brief_review_requested':
+      return payload.gating_decision
+        ? `Waiting at the strategy gate. Decision: ${String(payload.gating_decision).replace(/_/g, ' ')}.`
+        : 'Strategy brief was generated and is waiting for review.'
+    case 'strategy_approved':
+      return 'The strategy brief was approved and can now be used to generate a draft.'
+    case 'strategy_override_approved':
+      return 'The weak-fit stop was overridden, so tailoring can proceed with this strategy.'
+    case 'strategy_tailored':
+      return payload.quality_score != null
+        ? `A resume draft was generated from this strategy. Validation score: ${payload.quality_score}/100.`
+        : 'A resume draft was generated from this strategy.'
+    case 'strategy_section_regenerated':
+      return payload.section
+        ? `The ${String(payload.section).replace(/_/g, ' ')} section was regenerated.`
+        : 'A strategy section was regenerated.'
+    case 'strategy_duplicated':
+      return payload.source_brief_id
+        ? `A duplicate was created from strategy brief #${payload.source_brief_id}.`
+        : 'A duplicate strategy brief was created.'
+    case 'strategy_rebaselined':
+      return 'The saved strategy was rebuilt against the current job description and reset for review.'
+    case 'final_resume_approved':
+      return 'The final draft was approved.'
+    case 'final_resume_saved':
+      return 'The approved draft was saved and linked to the application record.'
+    default:
+      return payload && Object.keys(payload).length > 0 ? JSON.stringify(payload) : ''
+  }
+}
+
+function TailorResume({
+  loadBriefId = null,
+  onConsumedLoadBrief = null,
+  discoverSeed = null,
+  onConsumedDiscoverSeed = null,
+  onBrowseStrategies = null,
+  onViewApplications = null,
+}) {
   const [company, setCompany] = useState('')
   const [jobTitle, setJobTitle] = useState('')
   const [jdText, setJdText] = useState('')
@@ -158,8 +302,13 @@ function TailorResume() {
   const [protectedEntries, setProtectedEntries] = useState([])
   const [showInlineDiff, setShowInlineDiff] = useState(true) // Show diff by default
   const [lastReviewDelta, setLastReviewDelta] = useState(null)
+  const [regeneratingStrategySection, setRegeneratingStrategySection] = useState(null)
+  const [activeGateHighlight, setActiveGateHighlight] = useState(null)
   const previewSectionRefs = useRef({})
   const refinementTextareaRef = useRef(null)
+  const strategyApprovalRef = useRef(null)
+  const finalApprovalRef = useRef(null)
+  const lastGateStageRef = useRef(null)
   
   // Search/filter states
   const [resumeSearchQuery, setResumeSearchQuery] = useState('')
@@ -177,11 +326,14 @@ function TailorResume() {
   const [verifiedMetrics, setVerifiedMetrics] = useState([])
   const [experienceProfile, setExperienceProfile] = useState(null)
   const [profileStatus, setProfileStatus] = useState(null)
+  const [targetArchetypePreferences, setTargetArchetypePreferences] = useState([])
+  const [savingTargetArchetypes, setSavingTargetArchetypes] = useState(false)
   const [showSkillConfirmation, setShowSkillConfirmation] = useState(false)
   const [extractingSkills, setExtractingSkills] = useState(false)
   const [skillInputValue, setSkillInputValue] = useState('')
   const [skillInputSuggestions, setSkillInputSuggestions] = useState([])
   const [metricInputValue, setMetricInputValue] = useState('')
+  const [loadingSavedStrategyId, setLoadingSavedStrategyId] = useState(null)
 
   // Resume quality analysis state
   const [qualityReport, setQualityReport] = useState(null)
@@ -190,6 +342,7 @@ function TailorResume() {
   const [qualityAnswers, setQualityAnswers] = useState({})  // User answers to clarifying questions
   const [qualityIssueResolutions, setQualityIssueResolutions] = useState({})
   const [editedImprovedResume, setEditedImprovedResume] = useState('')  // Editable improved resume
+  const [discoveryContext, setDiscoveryContext] = useState(null)
   const [savingImprovedResume, setSavingImprovedResume] = useState(false)
   const [updatingDoc, setUpdatingDoc] = useState(false)
   const [lastRecheckAt, setLastRecheckAt] = useState(null)
@@ -206,6 +359,21 @@ function TailorResume() {
     const jobTitle = params.get('job_title')
     if (jobTitle) setJobTitle(decodeURIComponent(jobTitle))
   }, [])
+
+  useEffect(() => {
+    if (!discoverSeed) return
+    setCompany(discoverSeed.company || '')
+    setJobTitle(discoverSeed.job_title || '')
+    setJobUrl(discoverSeed.job_url || '')
+    setJdText(discoverSeed.jd_text || '')
+    setInputMethod('text')
+    setDiscoveryContext(discoverSeed)
+    setError(null)
+    setResult(null)
+    if (typeof onConsumedDiscoverSeed === 'function') {
+      onConsumedDiscoverSeed()
+    }
+  }, [discoverSeed, onConsumedDiscoverSeed])
 
   const persistPreferredResume = useCallback(async (docId, docName) => {
     if (!isAuthenticated || !docId) return
@@ -684,6 +852,7 @@ function TailorResume() {
         if (statusResponse.ok) {
           const statusData = await statusResponse.json();
           setProfileStatus(statusData);
+          setTargetArchetypePreferences(statusData.target_archetypes || [])
         }
         if (metricsResponse.ok) {
           const metricsData = await metricsResponse.json();
@@ -709,6 +878,7 @@ function TailorResume() {
         if (response.ok) {
           const data = await response.json();
           setProfileStatus(data);
+          setTargetArchetypePreferences(data.target_archetypes || [])
         }
       } catch (err) {
         console.error('Failed to refresh profile status:', err);
@@ -910,6 +1080,42 @@ function TailorResume() {
       setError(`Failed to import metrics: ${err.message}`)
     }
   }
+
+  const updateTargetArchetypeTier = (archetype, tier) => {
+    setTargetArchetypePreferences((prev) => {
+      const next = prev.filter((item) => item.archetype !== archetype)
+      if (!tier) return next
+      return [...next, { archetype, tier }]
+    })
+  }
+
+  const saveTargetArchetypes = async () => {
+    setSavingTargetArchetypes(true)
+    setError(null)
+    try {
+      const response = await fetch('/api/user/target-archetypes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ target_archetypes: targetArchetypePreferences })
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.detail || 'Failed to save target role families')
+      }
+      setTargetArchetypePreferences(data.target_archetypes || [])
+      setProfileStatus((prev) => prev ? {
+        ...prev,
+        target_archetypes: data.target_archetypes || []
+      } : prev)
+    } catch (err) {
+      setError(`Failed to save target role families: ${err.message}`)
+    } finally {
+      setSavingTargetArchetypes(false)
+    }
+  }
   
   const resetSkills = async () => {
     if (!window.confirm('Are you sure you want to reset all skills? This will clear your confirmed skills list.')) {
@@ -1077,7 +1283,8 @@ function TailorResume() {
                   evaluate_only: evaluateOnly,
                   track_application: trackApplication,
                   resume_doc_id: resumeDocId || null,
-                  save_folder_id: saveFolderId || null
+                  save_folder_id: saveFolderId || null,
+                  discovered_role_id: discoveryContext?.discovered_role_id || null
                 })
       })
 
@@ -1118,59 +1325,6 @@ function TailorResume() {
               })
             }
             
-            if (data.type === 'poor_fit_stopped') {
-              console.log('Received poor_fit_stopped event:', data)
-              
-              // Show the poor fit result
-              const evaluation = data.evaluation || {}
-              const parsedResume = data.parsed_resume || {}
-              const analyzedJd = data.analyzed_jd || {}
-              
-              // Build detailed message
-              let message = `## ⚠️ Workflow Stopped: Poor Job Fit\n\n`
-              message += `**Fit Score:** ${evaluation.score || 'N/A'}/10\n\n`
-              
-              if (evaluation.matching_areas && evaluation.matching_areas.length > 0) {
-                message += `### ✅ Matching Skills\n${evaluation.matching_areas.map(s => `- ${s}`).join('\n')}\n\n`
-              }
-              
-              if (evaluation.missing_areas && evaluation.missing_areas.length > 0) {
-                message += `### ❌ Missing Required Skills\n${evaluation.missing_areas.map(s => `- ${s}`).join('\n')}\n\n`
-              }
-              
-              if (evaluation.recommendations && evaluation.recommendations.length > 0) {
-                message += `### 💡 Recommendations\n${evaluation.recommendations.map(r => `- ${r}`).join('\n')}\n\n`
-              }
-              
-              if (analyzedJd.required_skills && analyzedJd.required_skills.length > 0) {
-                message += `### 📋 JD Required Skills\n${analyzedJd.required_skills.slice(0, 10).map(s => `- ${s}`).join('\n')}\n\n`
-              }
-              
-              if (parsedResume.all_skills && parsedResume.all_skills.length > 0) {
-                message += `### 📝 Your Skills\n${parsedResume.all_skills.slice(0, 15).map(s => `- ${s}`).join('\n')}\n`
-              }
-              
-              // Set result to display the evaluation
-              setResult({
-                poor_fit_stopped: true,
-                evaluation: evaluation,
-                parsed_resume: parsedResume,
-                analyzed_jd: analyzedJd,
-                fit_message: message
-              })
-              
-              setProgress({
-                currentStep: data.step_number || 3,
-                totalSteps: data.total_steps || 6,
-                message: '⚠️ Workflow stopped - Poor job fit',
-                progress: data.progress || 0.5,
-                step: 'poor_fit_stopped'
-              })
-              
-              setIsLoading(false)
-              return
-            }
-            
             if (data.type === 'approval_required') {
               console.log('Received approval_required event:', data)
               setApprovalId(data.approval_id)
@@ -1207,11 +1361,11 @@ function TailorResume() {
                 current_tailoring_iteration: data.result.current_tailoring_iteration || 1,
                 timestamp: Date.now()
               }
-              setResult(newResult)
-              setLastReviewDelta(null)
-              setComparisonBaseTailored('')
-              setIsLoading(false) // Stop loading spinner, show approval UI
-            }
+	              setResult(newResult)
+	              setLastReviewDelta(null)
+	              setComparisonBaseTailored('')
+	              setIsLoading(false) // Stop loading spinner, show approval UI
+	            }
             
             if (data.type === 'complete') {
               console.log('Received complete result:', {
@@ -1262,13 +1416,13 @@ function TailorResume() {
                 timestamp: Date.now() // Add timestamp to force re-render
               }
               console.log('Setting result with timestamp:', newResult.timestamp, 'resume length:', newResult.tailored_resume.length)
-              setResult(newResult)
-              setLastReviewDelta(null)
-              setComparisonBaseTailored('')
-              setIsLoading(false)
-              // Refresh resume and folder lists so the newly saved doc appears
-              if (data.result?.doc_url) refreshResumeAndFolderLists()
-            }
+	              setResult(newResult)
+	              setLastReviewDelta(null)
+	              setComparisonBaseTailored('')
+	              setIsLoading(false)
+	              // Refresh resume and folder lists so the newly saved doc appears
+	              if (data.result?.doc_url) refreshResumeAndFolderLists()
+	            }
           }
         }
       }
@@ -1303,27 +1457,348 @@ function TailorResume() {
       }
       
       const data = await response.json()
-      setApprovalRequired(false)
-      setApprovalId(null)
-      
-      // Update result with final data
-      if (data.result) {
-        const nextReviewDelta = buildReviewDelta(result?.review_bundle, data.result.review_bundle)
+      if (data.approval_required && data.result) {
+        setApprovalRequired(true)
+        setApprovalId(data.approval_id || approvalId)
         setResult({
-          ...result,
-          doc_url: data.result.doc_url,
-          application_id: data.result.application_id,
+          ...data.result,
           timestamp: Date.now()
         })
+        setComparisonBaseTailored('')
+        setLastReviewDelta(null)
+      } else {
+        setApprovalRequired(false)
+        setApprovalId(null)
+        if (data.result) {
+          setResult({
+            ...result,
+            doc_url: data.result.doc_url,
+            application_id: data.result.application_id,
+            strategy_brief_id: data.result.strategy_brief_id || result?.strategy_brief_id,
+            timestamp: Date.now()
+          })
+        }
+        refreshResumeAndFolderLists()
       }
-      // Refresh resume and folder lists so the newly saved doc appears
-      refreshResumeAndFolderLists()
     } catch (err) {
       setError(err.message)
     } finally {
       setIsLoading(false)
     }
   }
+
+  const handleToggleStrategyDirective = async (directiveId) => {
+    if (!approvalId || !result?.strategy_brief) return
+
+    const nextBrief = {
+      ...result.strategy_brief,
+      tailoring_directives: (result.strategy_brief.tailoring_directives || []).map((directive) =>
+        directive.id === directiveId
+          ? { ...directive, enabled: !directive.enabled }
+          : directive
+      )
+    }
+
+    setResult((prev) => ({
+      ...prev,
+      strategy_brief: nextBrief,
+      timestamp: Date.now()
+    }))
+
+    try {
+      const response = await fetch('/api/update-strategy-brief', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          approval_id: approvalId,
+          strategy_brief: nextBrief
+        })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Failed to update strategy brief')
+      }
+
+      const data = await response.json()
+      if (data.result) {
+        setResult({
+          ...data.result,
+          timestamp: Date.now()
+        })
+      }
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const handleRegenerateStrategySection = async (section) => {
+    if (!result?.strategy_brief_id) return
+    setRegeneratingStrategySection(section)
+    setError(null)
+    try {
+      const response = await fetch(`/api/job-strategy/${result.strategy_brief_id}/regenerate-section`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          jd_text: result?.jd_text || jdText,
+          section,
+          resume_doc_id: resumeDocId || null,
+        })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Failed to regenerate strategy section')
+      }
+
+      const data = await response.json()
+      if (data.strategy_brief) {
+        setResult((prev) => ({
+          ...prev,
+          strategy_brief: data.strategy_brief,
+          strategy_brief_id: data.strategy_brief.id || prev?.strategy_brief_id,
+          timestamp: Date.now()
+        }))
+      }
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setRegeneratingStrategySection(null)
+    }
+  }
+
+  const applyLoadedStrategyDetail = useCallback((brief, events = []) => {
+    setCompany(brief.company || '')
+    setJobTitle(brief.job_title || '')
+    setJobUrl(brief.job_url || '')
+    setJdText(brief.jd_text || '')
+    setDiscoveryContext(null)
+    setProgress(null)
+    setApprovalId(null)
+    setApprovalRequired(false)
+    setComparisonBaseTailored('')
+    setLastReviewDelta(null)
+    setResult({
+      strategy_brief: brief,
+      strategy_events: events,
+      strategy_brief_id: brief.id,
+      approval_stage: 'strategy',
+      approval_required: false,
+      approval_status: brief.approval_status || 'pending',
+      tailored_resume: '',
+      original_resume_text: '',
+      review_bundle: null,
+      validation: null,
+      evaluation: null,
+      quality_report: null,
+      quality_warning: null,
+      jd_requirements: null,
+      ats_score: null,
+      doc_url: '',
+      diff_path: null,
+      application_id: null,
+      fit_score: brief.fit_score,
+      should_apply: brief.should_apply,
+      timestamp: Date.now()
+    })
+  }, [])
+
+  const fetchLoadedStrategyDetail = useCallback(async (briefId) => {
+    const response = await fetch(`/api/job-strategy/${briefId}`, {
+      credentials: 'include'
+    })
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.detail || 'Failed to refresh strategy brief')
+    }
+    const data = await response.json()
+    return data
+  }, [])
+
+  const handleLoadedStrategyDecision = async (action) => {
+    if (!result?.strategy_brief_id) return
+    setIsLoading(true)
+    setError(null)
+    try {
+      const endpoint = action === 'override' ? 'override' : 'approve'
+      const response = await fetch(`/api/job-strategy/${result.strategy_brief_id}/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({})
+      })
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.detail || `Failed to ${action} strategy brief`)
+      }
+      const data = await response.json()
+      applyLoadedStrategyDetail(data.strategy_brief, data.events || [])
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleTailorFromLoadedStrategy = async () => {
+    if (!result?.strategy_brief_id) return
+    if (!resumeDocId) {
+      setError('Please select a resume before generating from a saved strategy brief')
+      return
+    }
+
+    setIsLoading(true)
+    setError(null)
+    try {
+      const response = await fetch(`/api/job-strategy/${result.strategy_brief_id}/tailor`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          resume_doc_id: resumeDocId,
+          tailoring_intensity: 'medium',
+          preserve_sections: refinementPreserveSections,
+          protected_entry_texts: protectedEntries
+        })
+      })
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.detail || 'Failed to generate draft from saved strategy')
+      }
+      const data = await response.json()
+      if (data.result) {
+        setApprovalRequired(data.result.approval_required !== undefined ? data.result.approval_required : false)
+        setResult({
+          ...data.result,
+          timestamp: Date.now()
+        })
+      }
+      try {
+        const detail = await fetchLoadedStrategyDetail(result.strategy_brief_id)
+        setResult((prev) => ({
+          ...prev,
+          strategy_brief: detail.strategy_brief,
+          strategy_events: detail.events || prev?.strategy_events || [],
+          strategy_brief_id: detail.strategy_brief?.id || prev?.strategy_brief_id,
+          timestamp: Date.now()
+        }))
+      } catch (detailErr) {
+        console.warn('Failed to refresh strategy events after tailoring:', detailErr)
+      }
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleDuplicateLoadedStrategy = async () => {
+    if (!result?.strategy_brief_id) return
+    setIsLoading(true)
+    setError(null)
+    try {
+      const response = await fetch(`/api/job-strategy/${result.strategy_brief_id}/duplicate`, {
+        method: 'POST',
+        credentials: 'include'
+      })
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.detail || 'Failed to duplicate strategy brief')
+      }
+      const data = await response.json()
+      applyLoadedStrategyDetail(data.strategy_brief, data.events || [])
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleRebaselineLoadedStrategy = async () => {
+    if (!result?.strategy_brief_id) return
+    setIsLoading(true)
+    setError(null)
+    try {
+      const response = await fetch(`/api/job-strategy/${result.strategy_brief_id}/rebaseline`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          company,
+          job_title: jobTitle,
+          job_url: jobUrl || null,
+          jd_text: jdText || null,
+          resume_doc_id: resumeDocId || null
+        })
+      })
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.detail || 'Failed to rebaseline strategy brief')
+      }
+      const data = await response.json()
+      applyLoadedStrategyDetail(data.strategy_brief, data.events || [])
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleLoadSavedStrategy = async (briefId) => {
+    setLoadingSavedStrategyId(briefId)
+    setError(null)
+    try {
+      const data = await fetchLoadedStrategyDetail(briefId)
+      applyLoadedStrategyDetail(data.strategy_brief, data.events || [])
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoadingSavedStrategyId(null)
+    }
+  }
+
+  useEffect(() => {
+    if (!loadBriefId || !isAuthenticated) return
+    handleLoadSavedStrategy(loadBriefId).finally(() => {
+      if (typeof onConsumedLoadBrief === 'function') {
+        onConsumedLoadBrief()
+      }
+    })
+  }, [loadBriefId, isAuthenticated, onConsumedLoadBrief])
+
+  const savedStrategyReadyForDraft = useMemo(
+    () => isStrategyReadyForDraft(result?.strategy_brief),
+    [result?.strategy_brief]
+  )
+
+  const currentStrategyQuery = useMemo(() => {
+    const brief = result?.strategy_brief
+    if (!brief) return ''
+    return `${brief.company || ''} ${brief.job_title || ''}`.trim()
+  }, [result?.strategy_brief])
+
+  const loadedStrategyDrift = useMemo(
+    () => computeJdDrift(result?.strategy_brief?.jd_text, jdText),
+    [result?.strategy_brief?.jd_text, jdText]
+  )
+
+  const directiveTraceSummary = useMemo(
+    () => summarizeDirectiveTrace(result?.review_bundle?.strategy_alignment?.metrics?.directive_trace || []),
+    [result?.review_bundle?.strategy_alignment?.metrics?.directive_trace]
+  )
+
+  const showLoadedStrategyWorkspace = !!(
+    result?.strategy_brief &&
+    !approvalRequired &&
+    !result?.tailored_resume
+  )
 
   const handleRefine = async () => {
     if (!approvalId || !refinementFeedback.trim()) {
@@ -1616,6 +2091,35 @@ function TailorResume() {
     return inferPreviewIntent(refinementTargetEntry, result?.review_bundle, result?.validation)
   }, [refinementTargetEntry, result?.review_bundle, result?.validation])
 
+  const progressState = useMemo(
+    () => getProgressState(progress, approvalRequired, result),
+    [progress, approvalRequired, result]
+  )
+
+  useEffect(() => {
+    if (!approvalRequired || !result?.approval_stage) {
+      lastGateStageRef.current = null
+      return
+    }
+
+    const stage = result.approval_stage
+    if (lastGateStageRef.current === stage) return
+    lastGateStageRef.current = stage
+
+    const targetRef = stage === 'strategy' ? strategyApprovalRef : finalApprovalRef
+    const targetNode = targetRef.current
+    if (!targetNode || typeof targetNode.scrollIntoView !== 'function') return
+
+    targetNode.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    setActiveGateHighlight(stage)
+
+    const timeoutId = window.setTimeout(() => {
+      setActiveGateHighlight((current) => (current === stage ? null : current))
+    }, 2200)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [approvalRequired, result?.approval_stage])
+
   const jumpToPreviewSection = (section) => {
     const node = previewSectionRefs.current[section]
     if (node && typeof node.scrollIntoView === 'function') {
@@ -1768,7 +2272,7 @@ function TailorResume() {
       setApprovalRequired(false)
       setApprovalId(null)
       setResult(null)
-      setError('Resume tailoring was rejected. You can start over with different parameters.')
+      setError('Review was rejected. You can start over with different parameters.')
     } catch (err) {
       setError(err.message)
     } finally {
@@ -1779,7 +2283,28 @@ function TailorResume() {
 
   return (
     <div className="tailor-resume">
-      <h2>Tailor Your Resume</h2>
+      <div className="tailor-hero">
+        <div>
+          <h2>Strategy-First Resume Tailoring</h2>
+          <p className="tailor-hero-copy">
+            Build a job strategy first, approve it, then generate a draft from that approved plan.
+          </p>
+        </div>
+      </div>
+
+      {discoveryContext && (
+        <div className="tailor-discovery-banner">
+          <div>
+            <strong>Discovery result loaded</strong>
+            <p>This role came from Discover. Review it, then click Tailor Resume to start the strategy-first workflow.</p>
+          </div>
+          <div className="tailor-discovery-meta">
+            <span>{discoveryContext.company || 'Unknown company'}</span>
+            <span>{discoveryContext.job_title || 'Untitled role'}</span>
+            <span>{discoveryContext.posted_label || 'Date unavailable'}</span>
+          </div>
+        </div>
+      )}
       
       <div className="form-group">
         <label>Company Name (optional, for save folder naming)</label>
@@ -2189,8 +2714,49 @@ function TailorResume() {
                 {profileStatus?.confirmed_metrics_count != null && (
                   <span> · {profileStatus.confirmed_metrics_count} verified metrics</span>
                 )}
+                {(profileStatus?.target_archetypes || []).length > 0 && (
+                  <span> · {(profileStatus.target_archetypes || []).length} saved role families</span>
+                )}
               </div>
             )}
+
+            <div className="target-archetype-editor">
+              <div className="target-archetype-header">
+                <div>
+                  <strong>Target Role Families</strong>
+                  <p className="panel-supporting-copy">
+                    Tell the evaluator which role families are primary targets, good secondary paths, or adjacent stretches.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={saveTargetArchetypes}
+                  disabled={savingTargetArchetypes}
+                >
+                  {savingTargetArchetypes ? 'Saving...' : 'Save Role Focus'}
+                </button>
+              </div>
+              <div className="target-archetype-grid">
+                {ARCHETYPE_OPTIONS.map((option) => {
+                  const currentTier = targetArchetypePreferences.find((item) => item.archetype === option.value)?.tier || ''
+                  return (
+                    <label key={option.value} className="target-archetype-row">
+                      <span>{option.label}</span>
+                      <select
+                        value={currentTier}
+                        onChange={(e) => updateTargetArchetypeTier(option.value, e.target.value)}
+                      >
+                        <option value="">Not targeted</option>
+                        <option value="primary">Primary</option>
+                        <option value="secondary">Secondary</option>
+                        <option value="adjacent">Adjacent</option>
+                      </select>
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
             
             <div className="skills-editor">
               <div className="skills-list">
@@ -2875,7 +3441,7 @@ function TailorResume() {
       )}
 
       {progress && (
-        <div className="progress-container">
+        <div className={`progress-container progress-${progressState.mode}`}>
           <div className="progress-bar">
             <div
               className="progress-fill"
@@ -2883,8 +3449,11 @@ function TailorResume() {
             />
           </div>
           <div className="progress-text">
-            {progress.message} ({progress.currentStep}/{progress.totalSteps})
+            {progressState.label} ({progress.currentStep}/{progress.totalSteps})
           </div>
+          {progressState.detail && (
+            <div className="progress-detail">{progressState.detail}</div>
+          )}
         </div>
       )}
 
@@ -2896,107 +3465,169 @@ function TailorResume() {
         {isLoading ? 'Processing...' : evaluateOnly ? 'Evaluate Fit Only' : 'Tailor Resume'}
       </button>
 
-      {/* Poor Fit Stopped Result */}
-      {result && result.poor_fit_stopped && (
-        <div className="result-container poor-fit-container">
-          <h3>⚠️ Workflow Stopped: Poor Job Fit</h3>
-          
-          <div className="poor-fit-summary">
-            <div className="fit-score-display">
-              <span className="score-label">Fit Score:</span>
-              <span className={`score-value score-${result.evaluation?.score >= 7 ? 'high' : result.evaluation?.score >= 5 ? 'medium' : 'low'}`}>
-                {result.evaluation?.score || 'N/A'}/10
-              </span>
-            </div>
-            <p className="fit-explanation">
-              This job may not be a good match for your current skillset. 
-              The workflow was stopped to save time.
-            </p>
-          </div>
-          
-          {/* Matching Skills */}
-          {result.evaluation?.matching_areas && result.evaluation.matching_areas.length > 0 && (
-            <div className="skills-section matching-skills">
-              <h4>✅ Matching Skills ({result.evaluation.matching_areas.length})</h4>
-              <ul>
-                {result.evaluation.matching_areas.map((skill, idx) => (
-                  <li key={idx}>{skill}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          
-          {/* Missing Skills */}
-          {result.evaluation?.missing_areas && result.evaluation.missing_areas.length > 0 && (
-            <div className="skills-section missing-skills">
-              <h4>❌ Missing Required Skills ({result.evaluation.missing_areas.length})</h4>
-              <ul>
-                {result.evaluation.missing_areas.map((skill, idx) => (
-                  <li key={idx}>{skill}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          
-          {/* JD Required Skills */}
-          {result.analyzed_jd?.required_skills && result.analyzed_jd.required_skills.length > 0 && (
-            <div className="skills-section jd-skills">
-              <h4>📋 JD Required Skills</h4>
-              <ul>
-                {result.analyzed_jd.required_skills.slice(0, 10).map((skill, idx) => (
-                  <li key={idx}>{skill}</li>
-                ))}
-                {result.analyzed_jd.required_skills.length > 10 && (
-                  <li className="more-items">...and {result.analyzed_jd.required_skills.length - 10} more</li>
-                )}
-              </ul>
-            </div>
-          )}
-          
-          {/* Your Skills */}
-          {result.parsed_resume?.all_skills && result.parsed_resume.all_skills.length > 0 && (
-            <div className="skills-section your-skills">
-              <h4>📝 Your Confirmed Skills ({result.parsed_resume.all_skills.length})</h4>
-              <ul>
-                {result.parsed_resume.all_skills.slice(0, 15).map((skill, idx) => (
-                  <li key={idx}>{skill}</li>
-                ))}
-                {result.parsed_resume.all_skills.length > 15 && (
-                  <li className="more-items">...and {result.parsed_resume.all_skills.length - 15} more</li>
-                )}
-              </ul>
-            </div>
-          )}
-          
-          {/* Recommendations */}
-          {result.evaluation?.recommendations && result.evaluation.recommendations.length > 0 && (
-            <div className="recommendations-section">
-              <h4>💡 Recommendations</h4>
-              <ul>
-                {result.evaluation.recommendations.map((rec, idx) => (
-                  <li key={idx}>{rec}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          
-          <div className="poor-fit-actions">
-            <button 
-              className="secondary-button"
-              onClick={() => {
-                setResult(null)
-                setProgress({ currentStep: 0, totalSteps: 0, message: '', progress: 0 })
-              }}
-            >
-              🔄 Try Another Job
-            </button>
-          </div>
-        </div>
-      )}
-
-      {result && !result.poor_fit_stopped && (
+      {result && (
         <div className="result-container">
-          <h3>{result.tailored_resume || result.doc_url ? '✅ Resume Tailored Successfully!' : '✅ Fit Evaluated Successfully!'}</h3>
+          <h3>
+            {approvalRequired && result.approval_stage === 'strategy'
+              ? '🧭 Strategy Brief Ready for Review'
+              : approvalRequired && result.approval_stage === 'final_resume'
+                ? '👁️ Resume Draft Ready for Final Review'
+                : showLoadedStrategyWorkspace
+                  ? '🧭 Saved Strategy Brief Loaded'
+                  : result.tailored_resume || result.doc_url
+                    ? '✅ Resume Tailored Successfully!'
+                    : '✅ Fit Evaluated Successfully!'}
+          </h3>
+          {showLoadedStrategyWorkspace && result.strategy_brief && (
+            <div className="loaded-strategy-panel">
+              <div className="loaded-strategy-hero">
+                <div>
+                  <div className="approval-eyebrow">Saved Strategy</div>
+                  <h4>
+                    {result.strategy_brief.company || 'Saved strategy'}{result.strategy_brief.job_title ? ` · ${result.strategy_brief.job_title}` : ''}
+                  </h4>
+                  <p>
+                    {savedStrategyReadyForDraft
+                      ? 'This strategy is approved and ready. Generate the draft from this plan when you want to continue tailoring.'
+                      : 'This strategy brief is loaded, but draft generation has not started yet. Review its status below and approve or override it before generating the draft.'}
+                  </p>
+                </div>
+                <div className="loaded-strategy-status">
+                  <span className={`strategy-status-pill status-${result.strategy_brief.approval_status || 'pending'}`}>
+                    {(result.strategy_brief.approval_status || 'pending').replace(/_/g, ' ')}
+                  </span>
+                  <span className={`quality-score score-${result.strategy_brief.fit_score >= 7 ? 'high' : result.strategy_brief.fit_score >= 5 ? 'medium' : 'low'}`}>
+                    Fit {result.strategy_brief.fit_score}/10
+                  </span>
+                </div>
+              </div>
+
+              {loadedStrategyDrift && jdText.trim() && (
+                <div className={`result-item strategy-staleness-note ${loadedStrategyDrift.isStale ? 'warning' : 'info'}`}>
+                  <strong>{loadedStrategyDrift.isStale ? 'Saved brief may be stale.' : 'Current JD differs from saved brief.'}</strong>{' '}
+                  {loadedStrategyDrift.isStale
+                    ? 'The current job description looks materially different from the one this brief was built from. Rebaseline before trusting the strategy.'
+                    : 'If the role text changed meaningfully, rebaseline to rebuild the strategy against the current JD.'}
+                </div>
+              )}
+
+              <div className="loaded-strategy-summary-grid">
+                <div className="strategy-overview-card">
+                  <strong>Next Step</strong>
+                  <span>{savedStrategyReadyForDraft ? 'Generate draft' : 'Approve strategy'}</span>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Gate</strong>
+                  <span>{(result.strategy_brief.gating_decision || 'proceed').replace(/_/g, ' ')}</span>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Archetype</strong>
+                  <span>{archetypeDisplayLabel(result.strategy_brief.archetype)}</span>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Target Fit</strong>
+                  <span>{(result.strategy_brief.target_alignment || 'unranked').replace(/_/g, ' ')}</span>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Confidence</strong>
+                  <span>{Math.round((result.strategy_brief.confidence || 0) * 100)}%</span>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Matched Requirements</strong>
+                  <span>{result.strategy_brief.provenance?.matched_requirement_count ?? 0}</span>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Adjacent Evidence</strong>
+                  <span>{result.strategy_brief.provenance?.adjacent_requirement_count ?? 0}</span>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Gaps</strong>
+                  <span>{result.strategy_brief.provenance?.gap_requirement_count ?? 0}</span>
+                </div>
+              </div>
+
+              {result.strategy_brief.role_summary && (
+                <div className="result-item loaded-strategy-summary">
+                  <strong>Strategy Summary:</strong> {result.strategy_brief.role_summary}
+                </div>
+              )}
+
+              {result.strategy_brief.provenance && (
+                <div className="loaded-strategy-provenance">
+                  <div className="strategy-overview-card">
+                    <strong>Evidence Grounding</strong>
+                    <span>
+                      {(result.strategy_brief.provenance.evidence_sections || []).length > 0
+                        ? (result.strategy_brief.provenance.evidence_sections || []).join(', ')
+                        : 'No source sections mapped yet'}
+                    </span>
+                  </div>
+                  <div className="strategy-overview-card">
+                    <strong>Blockers</strong>
+                    <span>
+                      {(result.strategy_brief.provenance.blocker_reason_codes || []).length > 0
+                        ? (result.strategy_brief.provenance.blocker_reason_codes || []).join(', ').replace(/_/g, ' ')
+                        : 'No normalized blockers'}
+                    </span>
+                  </div>
+                  <div className="strategy-overview-card strategy-overview-wide">
+                    <strong>Evidence Preview</strong>
+                    <span>
+                      {(result.strategy_brief.provenance.sample_evidence || []).length > 0
+                        ? (result.strategy_brief.provenance.sample_evidence || []).map(formatEvidencePreviewItem).filter(Boolean).join(' • ')
+                        : 'No compact evidence preview available yet'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              <div className="approval-actions loaded-strategy-actions">
+                <button className="secondary-button" onClick={handleDuplicateLoadedStrategy} disabled={isLoading}>
+                  Duplicate Brief
+                </button>
+                <button className="secondary-button" onClick={handleRebaselineLoadedStrategy} disabled={isLoading || !jdText.trim()}>
+                  Rebaseline from Current JD
+                </button>
+                {!savedStrategyReadyForDraft && (
+                  <button className="primary-button" onClick={() => handleLoadedStrategyDecision('approve')} disabled={isLoading}>
+                    Approve Brief
+                  </button>
+                )}
+                {!savedStrategyReadyForDraft && result.strategy_brief.gating_decision === 'stop_and_ask' && (
+                  <button className="secondary-button" onClick={() => handleLoadedStrategyDecision('override')} disabled={isLoading}>
+                    Override Weak Fit
+                  </button>
+                )}
+                {savedStrategyReadyForDraft && (
+                  <button className="primary-button" onClick={handleTailorFromLoadedStrategy} disabled={isLoading || !resumeDocId}>
+                    Generate Draft from Strategy
+                  </button>
+                )}
+                <button
+                  className="secondary-button"
+                  onClick={() => onBrowseStrategies?.(currentStrategyQuery)}
+                  disabled={!currentStrategyQuery}
+                >
+                  View in Strategies
+                </button>
+                <button
+                  className="secondary-button"
+                  onClick={() => onViewApplications?.(currentStrategyQuery)}
+                  disabled={!currentStrategyQuery}
+                >
+                  View Matching Applications
+                </button>
+              </div>
+              <div className="panel-supporting-copy loaded-strategy-support">
+                Duplicate keeps this strategy as a starting point for a separate branch. Rebaseline rebuilds this saved brief from the current JD and resets it for review.
+              </div>
+              {savedStrategyReadyForDraft && !resumeDocId && (
+                <div className="panel-supporting-copy loaded-strategy-support">
+                  Select a resume above before generating the draft from this saved strategy.
+                </div>
+              )}
+            </div>
+          )}
           {!result.tailored_resume && !result.doc_url && result.evaluation && (
             <div className="result-item">
               This run evaluated job fit only. No resume draft was generated or saved.
@@ -3090,6 +3721,7 @@ function TailorResume() {
               {renderReviewSection('Authenticity', '🛡️', result.review_bundle.authenticity)}
               {renderReviewSection('ATS Format', '📄', result.review_bundle.ats_parse)}
               {renderReviewSection('Job Match', '🎯', result.review_bundle.job_match)}
+              {renderReviewSection('Strategy Alignment', '🧭', result.review_bundle.strategy_alignment)}
               {renderReviewSection('Editorial', '✍️', result.review_bundle.editorial)}
             </>
           )}
@@ -3286,17 +3918,362 @@ function TailorResume() {
           )}
 
           {/* Approval UI - shown when approval is required */}
-          {approvalRequired && result.tailored_resume && (
-            <div className="approval-container">
-              <h3>👁️ Review & Approve Resume</h3>
-              <p>Please review the tailored resume below. You can approve it, request refinements, or reject it.</p>
+          {approvalRequired && result.approval_stage === 'strategy' && result.strategy_brief && (
+            <div
+              ref={strategyApprovalRef}
+              className={`approval-container strategy-approval-flow${activeGateHighlight === 'strategy' ? ' gate-highlight' : ''}`}
+            >
+              <div className="strategy-approval-hero">
+                <div>
+                  <div className="approval-eyebrow">Strategy Gate</div>
+                  <h3>Review Job Strategy Brief</h3>
+                  <p>
+                    Approve this plan before any resume draft is generated. Disabled directives will be excluded from the draft.
+                  </p>
+                </div>
+                <div className="strategy-approval-scorecard">
+                  <span className={`quality-score score-${result.strategy_brief.fit_score >= 7 ? 'high' : result.strategy_brief.fit_score >= 5 ? 'medium' : 'low'}`}>
+                    Fit: {result.strategy_brief.fit_score}/10
+                  </span>
+                  <span className={`strategy-status-pill status-${result.strategy_brief.approval_status || 'pending'}`}>
+                    {(result.strategy_brief.approval_status || 'pending').replace(/_/g, ' ')}
+                  </span>
+                </div>
+              </div>
+
+              <div className="strategy-approval-overview">
+                <div className="strategy-overview-card strategy-overview-primary">
+                  <div className="strategy-section-topline">
+                    <strong>Role Summary</strong>
+                    <button
+                      className="small-button"
+                      onClick={() => handleRegenerateStrategySection('role_summary')}
+                      disabled={!!regeneratingStrategySection}
+                    >
+                      {regeneratingStrategySection === 'role_summary' ? 'Regenerating...' : 'Refresh'}
+                    </button>
+                  </div>
+                  <p>{result.strategy_brief.role_summary}</p>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Archetype</strong>
+                  <span>{archetypeDisplayLabel(result.strategy_brief.archetype)}</span>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Target Fit</strong>
+                  <span>{(result.strategy_brief.target_alignment || 'unranked').replace(/_/g, ' ')}</span>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Recommendation</strong>
+                  <span>{result.strategy_brief.should_apply ? 'Apply' : 'Weak fit'}</span>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Gate</strong>
+                  <span>{(result.strategy_brief.gating_decision || 'proceed').replace(/_/g, ' ')}</span>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Confidence</strong>
+                  <span>{Math.round((result.strategy_brief.confidence || 0) * 100)}%</span>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Evidence Grounding</strong>
+                  <span>
+                    {(result.strategy_brief.provenance?.evidence_sections || []).length > 0
+                      ? (result.strategy_brief.provenance.evidence_sections || []).join(', ')
+                      : 'No mapped source sections'}
+                  </span>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Matched Requirements</strong>
+                  <span>{result.strategy_brief.provenance?.matched_requirement_count ?? 0}</span>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Adjacent Evidence</strong>
+                  <span>{result.strategy_brief.provenance?.adjacent_requirement_count ?? 0}</span>
+                </div>
+                <div className="strategy-overview-card">
+                  <strong>Gaps</strong>
+                  <span>{result.strategy_brief.provenance?.gap_requirement_count ?? 0}</span>
+                </div>
+              </div>
+
+              {!!result.strategy_brief.provenance?.sample_evidence?.length && (
+                <div className="validation-container strategy-section-card">
+                  <div className="strategy-section-topline">
+                    <div>
+                      <strong>Evidence Preview</strong>
+                      <p className="panel-supporting-copy">Representative proof points pulled into this strategy plan.</p>
+                    </div>
+                  </div>
+                  <div className="strategy-bullet-grid">
+                    {result.strategy_brief.provenance.sample_evidence.map((item, idx) => (
+                      <div key={idx} className="strategy-bullet-card">{formatEvidencePreviewItem(item)}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {result.strategy_brief.positioning_strategy?.length > 0 && (
+                <div className="validation-container strategy-section-card">
+                  <div className="strategy-section-topline">
+                    <div>
+                      <strong>Positioning Strategy</strong>
+                      <p className="panel-supporting-copy">How the resume should frame experience for this role.</p>
+                    </div>
+                    <button
+                      className="small-button"
+                      onClick={() => handleRegenerateStrategySection('positioning_strategy')}
+                      disabled={!!regeneratingStrategySection}
+                    >
+                      {regeneratingStrategySection === 'positioning_strategy' ? 'Regenerating...' : 'Refresh'}
+                    </button>
+                  </div>
+                  <div className="strategy-bullet-grid">
+                    {result.strategy_brief.positioning_strategy.map((item, idx) => (
+                      <div key={idx} className="strategy-bullet-card">{item}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {result.strategy_brief.requirement_evidence?.length > 0 && (
+                <div className="validation-container strategy-section-card">
+                  <div className="strategy-section-topline">
+                    <div>
+                      <strong>Requirement Evidence</strong>
+                      <p className="panel-supporting-copy">Each requirement is mapped to explicit resume evidence or a real gap.</p>
+                    </div>
+                    <button
+                      className="small-button"
+                      onClick={() => handleRegenerateStrategySection('requirement_evidence')}
+                      disabled={!!regeneratingStrategySection}
+                    >
+                      {regeneratingStrategySection === 'requirement_evidence' ? 'Regenerating...' : 'Refresh'}
+                    </button>
+                  </div>
+                  <div className="validation-issues strategy-evidence-list">
+                    {result.strategy_brief.requirement_evidence.map((item, idx) => (
+                      <div key={idx} className={`issue issue-${item.status === 'gap' ? 'warning' : 'info'}`}>
+                        <span className="issue-severity">{item.status.toUpperCase()}</span>
+                        <span className="issue-message">{item.requirement}</span>
+                        {item.evidence && <div className="issue-suggestion">{item.evidence}</div>}
+                        {item.source_section && <div className="issue-suggestion">Source: {item.source_section}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="strategy-approval-columns">
+                {result.strategy_brief.gap_assessments?.length > 0 && (
+                  <div className="validation-container strategy-section-card">
+                    <div className="strategy-section-topline">
+                      <div>
+                        <strong>Gap Assessment</strong>
+                        <p className="panel-supporting-copy">Truthful risk areas and mitigation, not forced equivalence.</p>
+                      </div>
+                      <button
+                        className="small-button"
+                        onClick={() => handleRegenerateStrategySection('gap_assessments')}
+                        disabled={!!regeneratingStrategySection}
+                      >
+                        {regeneratingStrategySection === 'gap_assessments' ? 'Regenerating...' : 'Refresh'}
+                      </button>
+                    </div>
+                    <div className="validation-issues">
+                      {result.strategy_brief.gap_assessments.map((gap, idx) => (
+                        <div key={idx} className="issue issue-warning">
+                          <span className="issue-severity">{gap.severity}</span>
+                          <span className="issue-message">{gap.requirement}</span>
+                          {gap.reason_code && <div className="issue-suggestion">Blocker type: {gap.reason_code.replace(/_/g, ' ')}</div>}
+                          {gap.mitigation && <div className="issue-suggestion">{gap.mitigation}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {result.strategy_brief.risk_notes?.length > 0 && (
+                  <div className="validation-container strategy-section-card">
+                    <div className="strategy-section-topline">
+                      <div>
+                        <strong>Risk Notes</strong>
+                        <p className="panel-supporting-copy">Authenticity and source-quality caveats to keep visible.</p>
+                      </div>
+                      <button
+                        className="small-button"
+                        onClick={() => handleRegenerateStrategySection('risk_notes')}
+                        disabled={!!regeneratingStrategySection}
+                      >
+                        {regeneratingStrategySection === 'risk_notes' ? 'Regenerating...' : 'Refresh'}
+                      </button>
+                    </div>
+                    <div className="strategy-bullet-grid">
+                      {result.strategy_brief.risk_notes.map((item, idx) => (
+                        <div key={idx} className="strategy-bullet-card warning">{item}</div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {result.strategy_brief.tailoring_directives?.length > 0 && (
+                <div className="validation-container strategy-section-card">
+                  <div className="strategy-section-topline">
+                    <div>
+                      <strong>Approved Tailoring Directives</strong>
+                      <p className="panel-supporting-copy">Turn individual directives on or off before draft generation.</p>
+                    </div>
+                    <button
+                      className="small-button"
+                      onClick={() => handleRegenerateStrategySection('tailoring_directives')}
+                      disabled={!!regeneratingStrategySection}
+                    >
+                      {regeneratingStrategySection === 'tailoring_directives' ? 'Regenerating...' : 'Refresh'}
+                    </button>
+                  </div>
+                  <div className="strategy-directive-grid">
+                    {result.strategy_brief.tailoring_directives.map((directive) => (
+                      <div key={directive.id} className={`strategy-directive-card ${directive.enabled ? 'enabled' : 'disabled'}`}>
+                        <div className="strategy-directive-topline">
+                          <span className="issue-severity">{directive.section}</span>
+                          <button
+                            className={`small-button${directive.enabled ? '' : ' active-toggle'}`}
+                            onClick={() => handleToggleStrategyDirective(directive.id)}
+                            disabled={isLoading}
+                          >
+                            {directive.enabled ? 'Disable' : 'Enable'}
+                          </button>
+                        </div>
+                        <div className="issue-message">{directive.action}</div>
+                        {directive.rationale && <div className="issue-suggestion">{directive.rationale}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="approval-actions strategy-approval-actions">
+                <button className="primary-button" onClick={handleApprove} disabled={isLoading}>
+                  Approve Strategy
+                </button>
+                <button className="secondary-button" onClick={handleReject} disabled={isLoading}>
+                  Reject
+                </button>
+              </div>
+            </div>
+          )}
+
+          {approvalRequired && result.approval_stage === 'final_resume' && result.tailored_resume && (
+            <div
+              ref={finalApprovalRef}
+              className={`approval-container final-approval-flow${activeGateHighlight === 'final_resume' ? ' gate-highlight' : ''}`}
+            >
+              <div className="final-approval-hero">
+                <div>
+                  <div className="approval-eyebrow">Final Gate</div>
+                  <h3>Review Tailored Resume</h3>
+                  <p>Please review the draft, inspect risky claims, and refine anything you want before approving and saving.</p>
+                </div>
+                <div className="final-approval-scorecard">
+                  {result.review_bundle?.overall && (
+                    <span className={`quality-score score-${result.review_bundle.overall.score >= 80 ? 'high' : result.review_bundle.overall.score >= 60 ? 'medium' : 'low'}`}>
+                      Overall {result.review_bundle.overall.score}/100
+                    </span>
+                  )}
+                  {result.review_bundle?.strategy_alignment && (
+                    <span className={`quality-score score-${result.review_bundle.strategy_alignment.score >= 80 ? 'high' : result.review_bundle.strategy_alignment.score >= 60 ? 'medium' : 'low'}`}>
+                      Strategy {result.review_bundle.strategy_alignment.score}/100
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="final-approval-overview">
+                {(result.evaluation || result.fit_score) && (
+                  <div className="final-overview-card">
+                    <strong>Fit</strong>
+                    <span>{result.evaluation?.score ?? result.fit_score}/10</span>
+                  </div>
+                )}
+                {result.review_bundle?.job_match && (
+                  <div className="final-overview-card">
+                    <strong>Job Match</strong>
+                    <span>{result.review_bundle.job_match.score}/100</span>
+                  </div>
+                )}
+                {result.review_bundle?.ats_parse && (
+                  <div className="final-overview-card">
+                    <strong>ATS Parse</strong>
+                    <span>{result.review_bundle.ats_parse.score}/100</span>
+                  </div>
+                )}
+                <div className="final-overview-card">
+                  <strong>Iteration</strong>
+                  <span>{result.current_tailoring_iteration || 1}</span>
+                </div>
+                <div className="final-overview-card">
+                  <strong>Applied Directives</strong>
+                  <span>{directiveTraceSummary.applied}</span>
+                </div>
+                <div className="final-overview-card">
+                  <strong>Underrepresented</strong>
+                  <span>{directiveTraceSummary.underrepresented}</span>
+                </div>
+              </div>
+
+              {result.review_bundle?.overall && (
+                <div className="validation-container final-section-card final-decision-card">
+                  <div className="strategy-section-topline">
+                    <div>
+                      <strong>Final Decision Summary</strong>
+                      <p className="panel-supporting-copy">{result.review_bundle.overall.summary}</p>
+                    </div>
+                  </div>
+                  <div className="final-decision-grid">
+                    <div className="final-decision-column">
+                      <strong>Top Wins</strong>
+                      <div className="strategy-bullet-grid">
+                        {(result.review_bundle.overall.top_wins || []).length > 0
+                          ? result.review_bundle.overall.top_wins.map((item, idx) => (
+                              <div key={`win-${idx}`} className="strategy-bullet-card">{item}</div>
+                            ))
+                          : <div className="strategy-bullet-card">No standout strengths were synthesized.</div>}
+                      </div>
+                    </div>
+                    <div className="final-decision-column">
+                      <strong>Top Risks</strong>
+                      <div className="strategy-bullet-grid">
+                        {(result.review_bundle.overall.top_risks || []).length > 0
+                          ? result.review_bundle.overall.top_risks.map((item, idx) => (
+                              <div key={`risk-${idx}`} className="strategy-bullet-card warning">{item}</div>
+                            ))
+                          : <div className="strategy-bullet-card">No major unresolved risks were synthesized.</div>}
+                      </div>
+                    </div>
+                  </div>
+                  {(result.review_bundle.overall.readiness_checks || []).length > 0 && (
+                    <div className="validation-recommendations">
+                      <strong>Readiness Checks</strong>
+                      <ul>
+                        {result.review_bundle.overall.readiness_checks.map((item, idx) => (
+                          <li key={`check-${idx}`}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {lastReviewDelta && lastReviewDelta.length > 0 && (
-                <div className="validation-container">
-                  <div className="validation-header">
-                    <strong>📈 Latest Refinement Impact</strong>
+                <div className="validation-container final-section-card">
+                  <div className="strategy-section-topline">
+                    <div>
+                      <strong>Latest Refinement Impact</strong>
+                      <p className="panel-supporting-copy">Score changes from the most recent refinement pass.</p>
+                    </div>
                   </div>
-                  <div className="metric-summary">
+                  <div className="metric-summary final-impact-row">
                     {lastReviewDelta.map((change) => (
                       <span key={change.key} style={{ color: change.delta >= 0 ? '#2e7d32' : '#c62828' }}>
                         {change.label} {change.delta >= 0 ? '+' : ''}{change.delta}
@@ -3307,9 +4284,12 @@ function TailorResume() {
               )}
 
               {(authenticityWarnings.issues.length > 0 || authenticityWarnings.metricFlags.length > 0) && (
-                <div className="validation-container">
-                  <div className="validation-header">
-                    <strong>🛡️ Review These Claims Before Approving</strong>
+                <div className="validation-container final-section-card">
+                  <div className="strategy-section-topline">
+                    <div>
+                      <strong>Review These Claims Before Approving</strong>
+                      <p className="panel-supporting-copy">These are the authenticity or metric issues most likely to need a final check.</p>
+                    </div>
                   </div>
                   {authenticityWarnings.issues.length > 0 && (
                     <div className="validation-issues">
@@ -3337,17 +4317,42 @@ function TailorResume() {
                   )}
                 </div>
               )}
+
+              {(result.review_bundle?.strategy_alignment?.metrics?.directive_trace || []).length > 0 && (
+                <div className="validation-container final-section-card">
+                  <div className="strategy-section-topline">
+                    <div>
+                      <strong>Directive Traceability</strong>
+                      <p className="panel-supporting-copy">Each approved directive is checked against the current draft so you can see what landed, what was skipped, and what still needs work.</p>
+                    </div>
+                  </div>
+                  <div className="strategy-directive-grid">
+                    {(result.review_bundle.strategy_alignment.metrics.directive_trace || []).map((item, idx) => (
+                      <div key={`${item.id || item.action}-${idx}`} className={`strategy-directive-card trace-${item.status}`}>
+                        <div className="strategy-directive-topline">
+                          <span className="issue-severity">{item.section}</span>
+                          <span className={`strategy-status-pill status-${item.status}`}>{String(item.status || 'unknown').replace(/_/g, ' ')}</span>
+                        </div>
+                        <div className="issue-message">{item.action}</div>
+                        {item.reason && <div className="issue-suggestion">{item.reason}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               
-              <div className="result-item resume-preview-container" key={`resume-preview-${result.timestamp || Date.now()}`}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                  <strong>📄 Tailored Resume Preview:</strong>
+              <div className="result-item resume-preview-container final-preview-workbench" key={`resume-preview-${result.timestamp || Date.now()}`}>
+                <div className="final-preview-header">
+                  <div>
+                    <strong>Tailored Resume Preview</strong>
+                    <p className="panel-supporting-copy">Inspect the draft directly, or switch to change-only view to focus on edits.</p>
+                  </div>
                   {result.original_resume_text && (
                     <button
                       className="secondary-button"
                       onClick={() => setShowInlineDiff(!showInlineDiff)}
-                      style={{ fontSize: '0.9rem', padding: '0.5rem 1rem' }}
                     >
-                      {showInlineDiff ? '👁️ Show Full Resume' : '🔍 Show Changes Only'}
+                      {showInlineDiff ? 'Show Full Resume' : 'Show Changes Only'}
                     </button>
                   )}
                 </div>
@@ -3460,14 +4465,13 @@ function TailorResume() {
                 )}
               </div>
               
-              <div className="approval-actions">
+              <div className="approval-actions final-approval-actions">
                 {result.original_resume_text && (
                   <button
                     className="secondary-button"
                     onClick={handleOpenComparison}
-                    style={{ marginBottom: '1rem' }}
                   >
-                    🔍 View Changes (Compare with Original)
+                    View Changes
                   </button>
                 )}
                 
@@ -3476,22 +4480,21 @@ function TailorResume() {
                   onClick={handleApprove}
                   disabled={isLoading}
                 >
-                  ✅ Approve & Save
+                  Approve & Save
                 </button>
                 
-                <div className="refine-section">
-                  <div style={{ marginBottom: '10px' }}>
-                    <strong style={{ display: 'block', marginBottom: '6px' }}>Refine one specific line or bullet</strong>
+                <div className="refine-section final-refine-panel">
+                  <div className="final-refine-block">
+                    <strong className="final-refine-label">Refine one specific line or bullet</strong>
                     {refinementTargetEntry && (
                       <div className="selected-preview-entry">
-                        <div style={{ marginBottom: '6px', fontSize: '0.9rem', color: '#1f4e79' }}>
+                        <div className="selected-preview-summary">
                           Selected from preview: {refinementTargetEntry.length > 140 ? `${refinementTargetEntry.slice(0, 140)}...` : refinementTargetEntry}
                           <button
                             type="button"
                             className="small-button"
                             onClick={() => setRefinementTargetEntry('')}
                             disabled={isLoading}
-                            style={{ marginLeft: '8px' }}
                           >
                             Clear
                           </button>
@@ -3512,7 +4515,7 @@ function TailorResume() {
                       value={refinementTargetEntry}
                       onChange={(e) => setRefinementTargetEntry(e.target.value)}
                       disabled={isLoading}
-                      style={{ width: '100%', padding: '8px' }}
+                      className="final-refine-select"
                     >
                       <option value="">Whole selected section(s) or full resume</option>
                       {refinementEntryOptions.map((entry) => (
@@ -3521,18 +4524,18 @@ function TailorResume() {
                         </option>
                       ))}
                     </select>
-                    <div style={{ marginTop: '4px', fontSize: '0.9rem', opacity: 0.8 }}>
+                    <div className="final-refine-hint">
                       If you choose a specific line, refinement rewrites only that entry.
                     </div>
                     {protectedEntries.length > 0 && (
-                      <div style={{ marginTop: '8px', fontSize: '0.9rem', color: '#23598c' }}>
+                      <div className="final-refine-meta">
                         Preserved lines locked for refinement: {protectedEntries.length}
                       </div>
                     )}
                   </div>
-                  <div style={{ marginBottom: '10px' }}>
-                    <strong style={{ display: 'block', marginBottom: '6px' }}>Only edit these sections</strong>
-                    <label style={{ marginRight: '12px' }}>
+                  <div className="final-refine-block">
+                    <strong className="final-refine-label">Only edit these sections</strong>
+                    <label className="final-inline-check">
                       <input
                         type="checkbox"
                         checked={refinementEditSections.includes('summary')}
@@ -3541,7 +4544,7 @@ function TailorResume() {
                       />{' '}
                       Summary
                     </label>
-                    <label style={{ marginRight: '12px' }}>
+                    <label className="final-inline-check">
                       <input
                         type="checkbox"
                         checked={refinementEditSections.includes('experience')}
@@ -3550,7 +4553,7 @@ function TailorResume() {
                       />{' '}
                       Experience
                     </label>
-                    <label style={{ marginRight: '12px' }}>
+                    <label className="final-inline-check">
                       <input
                         type="checkbox"
                         checked={refinementEditSections.includes('skills')}
@@ -3559,13 +4562,13 @@ function TailorResume() {
                       />{' '}
                       Skills
                     </label>
-                    <div style={{ marginTop: '4px', fontSize: '0.9rem', opacity: 0.8 }}>
+                    <div className="final-refine-hint">
                       Leave all unchecked to let refinement edit the whole resume.
                     </div>
                   </div>
-                  <div style={{ marginBottom: '10px' }}>
-                    <strong style={{ display: 'block', marginBottom: '6px' }}>Preserve exactly during refinement</strong>
-                    <label style={{ marginRight: '12px' }}>
+                  <div className="final-refine-block">
+                    <strong className="final-refine-label">Preserve exactly during refinement</strong>
+                    <label className="final-inline-check">
                       <input
                         type="checkbox"
                         checked={refinementPreserveSections.includes('education')}
@@ -3574,7 +4577,7 @@ function TailorResume() {
                       />{' '}
                       Education
                     </label>
-                    <label style={{ marginRight: '12px' }}>
+                    <label className="final-inline-check">
                       <input
                         type="checkbox"
                         checked={refinementPreserveSections.includes('summary')}
@@ -3583,7 +4586,7 @@ function TailorResume() {
                       />{' '}
                       Summary
                     </label>
-                    <label style={{ marginRight: '12px' }}>
+                    <label className="final-inline-check">
                       <input
                         type="checkbox"
                         checked={refinementPreserveSections.includes('skills')}
@@ -3600,14 +4603,14 @@ function TailorResume() {
                     onChange={(e) => setRefinementFeedback(e.target.value)}
                     disabled={isLoading}
                     rows={3}
-                    style={{ width: '100%', marginBottom: '10px', padding: '10px' }}
+                    className="final-refine-textarea"
                   />
                   <button
                     className="secondary-button"
                     onClick={handleRefine}
                     disabled={isLoading || !refinementFeedback.trim()}
                   >
-                    🔄 Refine Resume
+                    Refine Resume
                   </button>
                 </div>
                 
@@ -3615,9 +4618,8 @@ function TailorResume() {
                   className="danger-button"
                   onClick={handleReject}
                   disabled={isLoading}
-                  style={{ marginTop: '10px' }}
                 >
-                  ❌ Reject
+                  Reject
                 </button>
               </div>
             </div>
@@ -3671,6 +4673,29 @@ function TailorResume() {
                     console.log('Feedback submitted')
                   }}
                 />
+              </div>
+            </div>
+          )}
+
+          {result?.strategy_events?.length > 0 && (
+            <div className="validation-container strategy-history-card">
+              <div className="validation-header">
+                <strong>Strategy History</strong>
+              </div>
+              <div className="strategy-history-list">
+                {result.strategy_events.slice(-6).reverse().map((event) => (
+                  <div key={event.id || `${event.event_type}-${event.created_at}`} className="strategy-history-item">
+                    <div className="strategy-history-topline">
+                      <span className="issue-severity">{formatStrategyEventType(event.event_type)}</span>
+                      <span className="strategy-history-time">
+                        {event.created_at ? new Date(event.created_at).toLocaleString() : 'Recorded'}
+                      </span>
+                    </div>
+                    {describeStrategyEvent(event) && (
+                      <div className="issue-suggestion strategy-history-payload">{describeStrategyEvent(event)}</div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           )}

@@ -13,9 +13,13 @@ from resume_agent.storage.cache_store import get_cache_store
 from resume_agent.storage.user_store import (
     add_user_skill as add_user_skill_record,
     get_user_by_id,
+    get_user_evidence_records,
     get_user_skills as get_user_skills_for_user,
+    get_user_target_archetypes,
     remove_user_skill as remove_user_skill_for_user,
+    replace_user_evidence_records,
     replace_user_skills,
+    replace_user_target_archetypes,
     set_user_preferred_resume,
     update_user_skill as update_user_skill_for_user,
     upsert_google_user,
@@ -262,10 +266,38 @@ async def get_user_profile_status(request: Request):
         "detected_skills_count": len(detected),
         "suggested_skills_count": len(suggested),
         "confirmed_metrics_count": len(metrics),
+        "target_archetypes": get_user_target_archetypes(local_user["id"]),
         "onboarding_required": len(confirmed) == 0,
         "preferred_resume_doc_id": local_user.get("preferred_resume_doc_id"),
         "preferred_resume_name": local_user.get("preferred_resume_name"),
     }
+
+
+@router.get("/user/target-archetypes")
+async def get_target_archetypes(request: Request):
+    local_user = get_local_user(request)
+    return {"target_archetypes": get_user_target_archetypes(local_user["id"])}
+
+
+@router.post("/user/target-archetypes")
+async def replace_target_archetypes(request: Request):
+    try:
+        local_user = get_local_user(request)
+        body = await request.json()
+        records = body.get("target_archetypes", [])
+        if not isinstance(records, list):
+            raise HTTPException(status_code=400, detail="target_archetypes must be a list")
+        saved = replace_user_target_archetypes(local_user["id"], records)
+        return {
+            "success": True,
+            "target_archetypes": saved,
+            "message": "Target role families updated successfully",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error replacing target archetypes: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/user/preferences/resume")
@@ -428,6 +460,46 @@ async def import_user_metrics(request: Request):
         raise
     except Exception as e:
         logger.error(f"Error importing user metrics: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/user/evidence")
+async def get_user_evidence(request: Request):
+    """Get user's reusable confirmed evidence inventory."""
+    try:
+        local_user = get_local_user(request)
+        return {"evidence": get_user_evidence_records(local_user["id"], state="confirmed")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting user evidence: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/user/evidence")
+async def replace_user_evidence(request: Request):
+    """Replace user's reusable confirmed evidence inventory."""
+    try:
+        local_user = get_local_user(request)
+        body = await request.json()
+        evidence = body.get("evidence", [])
+        if not isinstance(evidence, list):
+            raise HTTPException(status_code=400, detail="evidence must be a list")
+        saved = replace_user_evidence_records(
+            local_user["id"],
+            evidence,
+            state="confirmed",
+            source="user_confirmed",
+        )
+        return {
+            "success": True,
+            "evidence": saved,
+            "message": "Evidence inventory updated successfully",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error replacing user evidence: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

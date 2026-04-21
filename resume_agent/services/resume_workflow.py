@@ -29,6 +29,7 @@ class WorkflowStep(str, Enum):
     PARSING_RESUME = "parsing_resume"  # New: Dedicated parsing step
     ANALYZING_JD = "analyzing_jd"  # New: Dedicated JD analysis step
     EVALUATING_FIT = "evaluating_fit"
+    BUILDING_STRATEGY = "building_strategy"
     TAILORING_RESUME = "tailoring_resume"
     VALIDATING_RESUME = "validating_resume"  # New: Quality validation
     PREVIEW = "preview"  # New: User preview/approval
@@ -59,6 +60,7 @@ class TailorResumeRequest:
     resume_doc_id: Optional[str] = None  # Optional: specific resume doc ID (defaults to RESUME_DOC_ID)
     save_folder_id: Optional[str] = None  # Optional: folder to save to (defaults to GOOGLE_FOLDER_ID)
     local_user_id: Optional[int] = None  # Optional authenticated local user id for profile-backed context
+    discovered_role_id: Optional[int] = None  # Optional discovery inbox record that seeded this workflow
 
 
 @dataclass
@@ -95,6 +97,9 @@ class TailorResumeResult:
     analyzed_jd: Optional[Any] = None  # AnalyzedJD from JDAnalyzerAgent
     ats_score_object: Optional[Any] = None  # ATSScore from ATSScorerAgent
     profile_context: Optional[UserProfileContext] = None  # Persisted authenticated user context
+    strategy_brief: Optional[Any] = None  # JobStrategyBrief
+    strategy_brief_id: Optional[int] = None  # Persisted strategy brief id
+    approval_stage: Optional[str] = None  # strategy | final_resume
     # Workflow control flags
     poor_fit_stopped: bool = False  # True if workflow stopped due to poor fit evaluation
     resume_source_cache_key: Optional[str] = None  # Stable source-version cache key for resume parsing
@@ -558,7 +563,7 @@ class ResumeWorkflowService:
                         result.diff_path = str(diff_path) if diff_path else None
                     except Exception as e:
                         logger.warning(f"Failed to generate diff: {e}")
-                result.current_step = WorkflowStep.TRACKING_APPLICATION if request.track_application else WorkflowStep.COMPLETED
+                result.current_step = WorkflowStep.TRACKING_APPLICATION if (request.track_application and not request.discovered_role_id) else WorkflowStep.COMPLETED
                 logger.info("Workflow step: Diff generated")
                 
             elif current_step == WorkflowStep.TRACKING_APPLICATION:
@@ -574,6 +579,7 @@ class ResumeWorkflowService:
                     application_id = add_or_update_application(
                         job_title=job_title,
                         company=company,
+                        user_id=request.local_user_id,
                         job_url=request.job_url or "",
                         fit_score=result.evaluation.score,
                         resume_doc_id=result.tailored_doc_id,
@@ -700,7 +706,7 @@ class ResumeWorkflowService:
             
             # Step 6: Track application (optional); same company+role updates existing record
             application_id = None
-            if request.track_application:
+            if request.track_application and not request.discovered_role_id:
                 try:
                     # Get evaluation if we didn't already do it
                     if evaluation is None:
@@ -710,6 +716,7 @@ class ResumeWorkflowService:
                     application_id = add_or_update_application(
                         job_title=job_title,
                         company=company,
+                        user_id=request.local_user_id,
                         job_url=request.job_url or "",
                         fit_score=evaluation.score,
                         resume_doc_id=tailored_doc_id,

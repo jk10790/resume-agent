@@ -1,6 +1,12 @@
 from unittest.mock import Mock
 
 from resume_agent.agents.resume_tailor_agent import ResumeTailorAgent
+from resume_agent.models.agent_models import (
+    JobStrategyBrief,
+    StrategyDirective,
+    RequirementEvidence,
+    GapAssessment,
+)
 from resume_agent.utils.agent_cache import AgentCache
 
 
@@ -208,3 +214,66 @@ def test_revert_single_entry_restores_best_original_match():
 
     assert "- Built scalable backend services using Spring Boot" in reverted
     assert "- Delivered scalable backend services with stronger technical emphasis" not in reverted
+
+
+def test_build_tailoring_context_uses_enabled_strategy_directives_only():
+    agent = ResumeTailorAgent(Mock(), confirmed_skills=[])
+    strategy_brief = JobStrategyBrief(
+        company="Acme",
+        job_title="Platform Engineer",
+        fit_score=6,
+        should_apply=True,
+        confidence=0.8,
+        role_summary="Lead with platform work.",
+        positioning_strategy=["Frame the candidate as a backend platform operator."],
+        tailoring_directives=[
+            StrategyDirective(
+                id="enabled_dir",
+                section="summary",
+                action="Highlight platform engineering",
+                rationale="Matches the role",
+                enabled=True,
+            ),
+            StrategyDirective(
+                id="disabled_dir",
+                section="skills",
+                action="Add Kubernetes expertise",
+                rationale="Would overstate experience",
+                enabled=False,
+            ),
+        ],
+        requirement_evidence=[
+            RequirementEvidence(
+                requirement="Kubernetes",
+                status="gap",
+                evidence="No direct support detected",
+                source_section=None,
+            )
+        ],
+        gap_assessments=[
+            GapAssessment(
+                requirement="Kubernetes",
+                severity="stretch",
+                mitigation="Use adjacent container orchestration evidence only.",
+            )
+        ],
+        risk_notes=["Do not imply hands-on Kubernetes ownership."],
+    )
+
+    context = agent._build_tailoring_context(
+        parsed_resume=Mock(all_skills=["Python", "AWS"], total_years_experience=6, job_titles=["Engineer"]),
+        analyzed_jd=Mock(
+            required_skills=["Python", "Kubernetes"],
+            preferred_skills=["Terraform"],
+            required_experience_years=5,
+            technologies_needed=["Python", "AWS", "Kubernetes"],
+        ),
+        fit_evaluation=Mock(score=6, should_apply=True, matching_areas=["Python"], missing_areas=["Kubernetes"]),
+        ats_score=None,
+        strategy_brief=strategy_brief,
+    )
+
+    assert "Highlight platform engineering" in context
+    assert "Disabled Directives" in context
+    assert "Add Kubernetes expertise" in context
+    assert "Do Not Add Unsupported Claims For: Kubernetes" in context

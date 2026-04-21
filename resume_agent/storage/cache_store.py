@@ -46,6 +46,12 @@ class SQLiteCacheStore:
         _initialize_cache_schema()
 
     def get(self, namespace: str, cache_key: str) -> Optional[Dict[str, Any]]:
+        entry = self.peek(namespace, cache_key)
+        if not entry:
+            return None
+        return entry["payload"]
+
+    def peek(self, namespace: str, cache_key: str, *, include_expired: bool = False) -> Optional[Dict[str, Any]]:
         now = _utcnow()
         conn = get_db_connection()
         try:
@@ -60,23 +66,29 @@ class SQLiteCacheStore:
             if not row:
                 return None
             expires_at = row["expires_at"]
-            if expires_at and expires_at <= now:
+            is_expired = bool(expires_at and expires_at <= now)
+            if is_expired and not include_expired:
                 conn.execute(
                     "DELETE FROM cache_entries WHERE namespace = ? AND cache_key = ?",
                     (namespace, cache_key),
                 )
                 conn.commit()
                 return None
-            conn.execute(
-                """
-                UPDATE cache_entries
-                SET last_used_at = ?, updated_at = ?
-                WHERE namespace = ? AND cache_key = ?
-                """,
-                (now, now, namespace, cache_key),
-            )
-            conn.commit()
-            return json.loads(row["payload_json"])
+            if not is_expired:
+                conn.execute(
+                    """
+                    UPDATE cache_entries
+                    SET last_used_at = ?, updated_at = ?
+                    WHERE namespace = ? AND cache_key = ?
+                    """,
+                    (now, now, namespace, cache_key),
+                )
+                conn.commit()
+            return {
+                "payload": json.loads(row["payload_json"]),
+                "expires_at": expires_at,
+                "is_expired": is_expired,
+            }
         finally:
             conn.close()
 

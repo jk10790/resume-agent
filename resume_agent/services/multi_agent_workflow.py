@@ -32,11 +32,20 @@ from ..review.bundle_builder import build_review_bundle
 
 # Import models
 from ..models.agent_models import ParsedResume, AnalyzedJD, UserProfileContext
+from ..models.resume import FitEvaluation
 from .profile_context_service import ProfileContextService
+from .strategy_brief_service import StrategyBriefService
+from .archetype_strategy import apply_target_alignment, detect_job_archetype
 
 # Import existing models
 from .resume_workflow import TailorResumeRequest, TailorResumeResult, WorkflowStep
-from ..storage.user_store import get_quality_report_for_user, save_quality_report_for_user
+from ..storage.user_store import (
+    add_job_strategy_event_for_user,
+    get_quality_report_for_user,
+    link_discovered_role_strategy_brief_for_user,
+    save_quality_report_for_user,
+    update_job_strategy_brief_status_for_user,
+)
 
 
 class MultiAgentWorkflowService:
@@ -66,6 +75,7 @@ class MultiAgentWorkflowService:
         self.resume_fixer = ResumeFixerAgent(self.llm_service)        # Agent 7: Fix errors
         self.resume_humanizer = ResumeHumanizerAgent(self.llm_service)  # Agent 8: Humanize output
         self.profile_context_service = ProfileContextService()
+        self.strategy_brief_service = StrategyBriefService(self.llm_service)
 
     def _load_profile_context(self, request: TailorResumeRequest) -> UserProfileContext:
         """Load persisted profile context once per workflow from the authenticated local profile."""
@@ -178,8 +188,7 @@ class MultiAgentWorkflowService:
                 except Exception as e:
                     logger.warning(f"Quality cache check failed: {e}")
                 # Next step: parse resume and analyze JD (can be parallel)
-                should_evaluate = request.evaluate_first or request.evaluate_only
-                result.current_step = WorkflowStep.PARSING_RESUME if should_evaluate else WorkflowStep.TAILORING_RESUME
+                result.current_step = WorkflowStep.PARSING_RESUME
                 logger.info("Multi-Agent Workflow: Resume loaded", resume_length=len(resume_text))
             
             elif current_step == WorkflowStep.PARSING_RESUME:
@@ -294,6 +303,22 @@ class MultiAgentWorkflowService:
                 logger.info("Agent 3: Fit Evaluator - Evaluating fit")
                 try:
                     fit_evaluation = self.fit_evaluator.evaluate_fit(parsed_resume, analyzed_jd)
+                    if result.profile_context and result.profile_context.target_archetype_preferences:
+                        fit_evaluation, target_alignment = apply_target_alignment(
+                            fit_evaluation,
+                            archetype=detect_job_archetype(analyzed_jd),
+                            preferences=result.profile_context.target_archetype_preferences,
+                        )
+                        existing_reasoning = fit_evaluation.reasoning or ""
+                        fit_evaluation = FitEvaluation(
+                            score=fit_evaluation.score,
+                            should_apply=fit_evaluation.should_apply,
+                            confidence=fit_evaluation.confidence,
+                            matching_areas=fit_evaluation.matching_areas,
+                            missing_areas=fit_evaluation.missing_areas,
+                            recommendations=fit_evaluation.recommendations[:8],
+                            reasoning=f"{existing_reasoning} Target alignment: {target_alignment}.".strip()
+                        )
                     result.evaluation = fit_evaluation
                     if progress_callback:
                         progress_callback(f"✅ Fit evaluation complete (Score: {fit_evaluation.score}/10)")
@@ -318,22 +343,73 @@ class MultiAgentWorkflowService:
                     should_apply=fit_evaluation.should_apply
                 )
                 
-                # If fit is poor, stop and return results to user
-                if not fit_evaluation.should_apply and fit_evaluation.score < 5:
-                    logger.warning(
-                        "Multi-Agent Workflow: Poor fit detected, stopping workflow",
-                        score=fit_evaluation.score,
-                        should_apply=fit_evaluation.should_apply
-                    )
-                    result.current_step = WorkflowStep.COMPLETED
-                    result.poor_fit_stopped = True  # Flag to indicate workflow stopped due to poor fit
-                    return result
-                
                 if request.evaluate_only:
                     result.current_step = WorkflowStep.COMPLETED
                 else:
-                    # Transition to tailoring only if fit is adequate
-                    result.current_step = WorkflowStep.TAILORING_RESUME
+                    result.current_step = WorkflowStep.BUILDING_STRATEGY
+
+            elif current_step == WorkflowStep.BUILDING_STRATEGY:
+                logger.info("Multi-Agent Workflow: Building strategy brief")
+                if not result.resume_text:
+                    result.error = "Resume not loaded"
+                    result.current_step = WorkflowStep.ERROR
+                    return result
+
+                parsed_resume = result.parsed_resume
+                analyzed_jd = result.analyzed_jd
+                fit_evaluation = result.evaluation
+                if not parsed_resume or not analyzed_jd or not fit_evaluation:
+                    result.error = "Strategy brief requires parsed resume, analyzed JD, and fit evaluation"
+                    result.current_step = WorkflowStep.ERROR
+                    return result
+
+                if progress_callback:
+                    progress_callback("Building job strategy brief...")
+
+                try:
+                    brief = self.strategy_brief_service.find_existing_brief(
+                        request.local_user_id,
+                        company=request.company or analyzed_jd.company or "",
+                        job_title=request.job_title or analyzed_jd.job_title or "",
+                    )
+                    if brief is None:
+                        brief = self.strategy_brief_service.build_brief(
+                            company=request.company,
+                            job_title=request.job_title,
+                            job_url=request.job_url,
+                            jd_text=request.jd_text,
+                            parsed_resume=parsed_resume,
+                            analyzed_jd=analyzed_jd,
+                            fit_evaluation=fit_evaluation,
+                            profile_context=result.profile_context,
+                        )
+                    brief = self.strategy_brief_service.persist_brief(request.local_user_id, brief)
+                    result.strategy_brief = brief
+                    result.strategy_brief_id = brief.id
+                    if request.local_user_id and request.discovered_role_id and result.strategy_brief_id:
+                        link_discovered_role_strategy_brief_for_user(
+                            request.local_user_id,
+                            request.discovered_role_id,
+                            result.strategy_brief_id,
+                        )
+                    if request.local_user_id and result.strategy_brief_id:
+                        add_job_strategy_event_for_user(
+                            request.local_user_id,
+                            strategy_brief_id=result.strategy_brief_id,
+                            event_type="strategy_brief_review_requested",
+                            payload={"gating_decision": brief.gating_decision},
+                        )
+                    result.approval_required = True
+                    result.approval_status = "pending"
+                    result.approval_stage = "strategy"
+                    result.current_step = WorkflowStep.PREVIEW
+                    if progress_callback:
+                        progress_callback("✅ Strategy brief ready for review")
+                except Exception as e:
+                    logger.error(f"Strategy brief generation failed: {e}", exc_info=True)
+                    result.error = f"Failed to build strategy brief: {e}"
+                    result.current_step = WorkflowStep.ERROR
+                    return result
             
             elif current_step == WorkflowStep.TAILORING_RESUME:
                 logger.info("Multi-Agent Workflow: Starting tailoring")
@@ -347,7 +423,18 @@ class MultiAgentWorkflowService:
                 parsed_resume = result.parsed_resume
                 analyzed_jd = result.analyzed_jd
                 fit_evaluation = result.evaluation
-                
+                strategy_brief = result.strategy_brief
+
+                if not request.refinement_feedback and not request.revert_target_entry:
+                    if not strategy_brief:
+                        result.error = "Strategy brief not available"
+                        result.current_step = WorkflowStep.ERROR
+                        return result
+                    if result.approval_stage == "strategy" and result.approval_status != "approved":
+                        result.error = "Strategy brief must be approved before tailoring"
+                        result.current_step = WorkflowStep.ERROR
+                        return result
+
                 # If not from previous step, parse now (with error handling)
                 if not parsed_resume:
                     logger.info("Agent 1: Resume Parser - Parsing resume (late)")
@@ -471,6 +558,7 @@ class MultiAgentWorkflowService:
                             analyzed_jd,
                             fit_evaluation,
                             None,  # ATS score calculated after tailoring
+                            strategy_brief=strategy_brief,
                             intensity=intensity,
                             refinement_feedback=request.refinement_feedback,
                             current_draft_text=current_draft_text,
@@ -560,6 +648,7 @@ class MultiAgentWorkflowService:
                             ats_score,
                             user_skills=(result.profile_context.confirmed_skills if result.profile_context else []),
                             verified_metric_records=(result.profile_context.confirmed_metric_records if result.profile_context else []),
+                            strategy_brief=strategy_brief,
                         )
                     except Exception as e:
                         logger.error(f"Review agent failed: {e}", exc_info=True)
@@ -602,6 +691,7 @@ class MultiAgentWorkflowService:
                                 ats_score=ats_score,
                                 fit_evaluation=fit_evaluation,
                                 analyzed_jd=analyzed_jd,
+                                strategy_brief=strategy_brief,
                             ),
                             changes_made=[],
                             final_quality_score=50.0
@@ -686,6 +776,7 @@ class MultiAgentWorkflowService:
                                 ats_score=result.ats_score_object,
                                 fit_evaluation=result.evaluation,
                                 analyzed_jd=result.analyzed_jd,
+                                strategy_brief=result.strategy_brief,
                             )
                             
                             # Check if there are still ERRORs
@@ -703,6 +794,7 @@ class MultiAgentWorkflowService:
                 result.current_step = WorkflowStep.PREVIEW
                 result.approval_required = True
                 result.approval_status = "pending"
+                result.approval_stage = "final_resume"
                 logger.info("Multi-Agent Workflow: Validation complete")
             
             elif current_step == WorkflowStep.PREVIEW:
@@ -787,8 +879,10 @@ class MultiAgentWorkflowService:
                     application_id = add_or_update_application(
                         job_title=job_title,
                         company=company,
+                        user_id=request.local_user_id,
                         job_url=request.job_url or "",
                         fit_score=result.evaluation.score,
+                        strategy_brief_id=result.strategy_brief_id,
                         resume_doc_id=result.tailored_doc_id,
                     )
                     result.application_id = application_id
@@ -846,3 +940,34 @@ class MultiAgentWorkflowService:
             if clean and clean not in normalized:
                 normalized.append(clean)
         return normalized
+
+    def mark_strategy_approval(
+        self,
+        result: TailorResumeResult,
+        *,
+        approved: bool,
+        overridden: bool = False,
+        user_id: Optional[int] = None,
+    ) -> TailorResumeResult:
+        """Update in-memory and persisted strategy approval state."""
+        if not result.strategy_brief:
+            return result
+
+        status = "rejected"
+        if approved:
+            status = "override_approved" if overridden else "approved"
+
+        result.strategy_brief.approval_status = status
+        result.approval_status = "approved" if approved else "rejected"
+        if user_id and result.strategy_brief_id:
+            try:
+                update_job_strategy_brief_status_for_user(user_id, result.strategy_brief_id, status)
+                add_job_strategy_event_for_user(
+                    user_id,
+                    strategy_brief_id=result.strategy_brief_id,
+                    event_type=f"strategy_{status}",
+                    payload={"stage": "strategy"},
+                )
+            except Exception as e:
+                logger.warning(f"Failed to persist strategy brief approval status: {e}")
+        return result

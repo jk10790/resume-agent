@@ -42,6 +42,7 @@ class ReviewAgent:
         ats_score: Optional["ATSScore"] = None,
         user_skills: Optional[List[str]] = None,
         verified_metric_records: Optional[List[Dict[str, Any]]] = None,
+        strategy_brief=None,
     ) -> ReviewResult:
         """
         Review tailored resume and make final adjustments.
@@ -105,6 +106,7 @@ class ReviewAgent:
                 ats_score=ats_score,
                 fit_evaluation=fit_evaluation,
                 analyzed_jd=analyzed_jd,
+                strategy_brief=strategy_brief,
             ),
             changes_made=changes_made,
             final_quality_score=validation.quality_score

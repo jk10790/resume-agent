@@ -146,6 +146,8 @@ class UserProfileContext(BaseModel):
     detected_skill_records: List[Dict[str, Any]] = Field(default_factory=list, description="Detected skills awaiting confirmation")
     suggested_skill_records: List[Dict[str, Any]] = Field(default_factory=list, description="Suggested skills derived from resume/role")
     confirmed_metric_records: List[Dict[str, Any]] = Field(default_factory=list, description="Confirmed metrics/evidence from the user profile")
+    confirmed_evidence_records: List[Dict[str, Any]] = Field(default_factory=list, description="Reusable confirmed evidence/story inventory")
+    target_archetype_preferences: List[Dict[str, str]] = Field(default_factory=list, description="Saved target role archetypes with primary|secondary|adjacent tiers")
     preferred_resume_doc_id: Optional[str] = Field(None, description="Preferred resume Google Doc id")
     preferred_resume_name: Optional[str] = Field(None, description="Preferred resume display name")
 
@@ -360,13 +362,89 @@ class ReviewOverall(BaseModel):
     verdict: str = Field(..., description="Overall verdict")
     summary: str = Field("", description="Summary of overall recommendation")
     recommendation: str = Field(..., description="Submission recommendation")
+    top_wins: List[str] = Field(default_factory=list, description="Most important strengths supporting submission")
+    top_risks: List[str] = Field(default_factory=list, description="Most important unresolved risks before submission")
+    readiness_checks: List[str] = Field(default_factory=list, description="Plain-language final checks for the reviewer")
+
+
+class StrategyDirective(BaseModel):
+    """One concrete, user-reviewable tailoring move derived from the strategy brief."""
+    id: str = Field(..., description="Stable directive id")
+    section: str = Field(..., description="Resume section to adjust")
+    action: str = Field(..., description="Specific tailoring action")
+    rationale: str = Field("", description="Why this action helps for the role")
+    enabled: bool = Field(True, description="Whether the directive is approved for use")
+
+
+class RequirementEvidence(BaseModel):
+    """Mapping from JD requirement to grounded resume/profile evidence."""
+    requirement: str = Field(..., description="Job requirement text")
+    status: str = Field(..., description="matched|adjacent|gap")
+    evidence: str = Field("", description="Grounded supporting evidence or explanation")
+    source_section: Optional[str] = Field(None, description="Resume/profile section the evidence came from")
+
+
+class GapAssessment(BaseModel):
+    """Structured risk and mitigation for one notable gap."""
+    requirement: str = Field(..., description="The missing or weak requirement")
+    severity: str = Field(..., description="hard_blocker|stretch|nice_to_have")
+    mitigation: str = Field("", description="Truthful mitigation or positioning strategy")
+    reason_code: Optional[str] = Field(None, description="Optional blocker taxonomy such as stack_mismatch or geo_restriction")
+
+
+class JobStrategyBrief(BaseModel):
+    """Canonical per-job strategy artifact that must be approved before tailoring."""
+    id: Optional[int] = Field(None, description="Persisted storage id")
+    company: str = Field("", description="Company name")
+    job_title: str = Field("", description="Job title")
+    job_url: Optional[str] = Field(None, description="Job URL if available")
+    jd_text: Optional[str] = Field(None, description="Canonical job description text for reuse")
+    archetype: str = Field("general", description="Detected role archetype")
+    target_alignment: str = Field("unranked", description="primary|secondary|adjacent|unranked")
+    role_summary: str = Field("", description="Concise role summary and recommendation")
+    fit_score: int = Field(..., ge=1, le=10, description="Fit score 1-10")
+    should_apply: bool = Field(False, description="Whether the role looks worth pursuing")
+    confidence: float = Field(0.5, ge=0.0, le=1.0, description="Confidence in the strategy")
+    gating_decision: str = Field("proceed", description="proceed|stop_and_ask")
+    requirement_evidence: List[RequirementEvidence] = Field(default_factory=list)
+    gap_assessments: List[GapAssessment] = Field(default_factory=list)
+    positioning_strategy: List[str] = Field(default_factory=list)
+    tailoring_directives: List[StrategyDirective] = Field(default_factory=list)
+    interview_seeds: List[str] = Field(default_factory=list)
+    risk_notes: List[str] = Field(default_factory=list)
+    approval_status: str = Field("pending", description="pending|approved|rejected|override_approved")
+    created_at: Optional[str] = Field(None, description="Creation timestamp")
+    updated_at: Optional[str] = Field(None, description="Update timestamp")
+
+
+class StrategyApprovalDecision(BaseModel):
+    """Recorded user decision for a strategy brief gate."""
+    strategy_brief_id: int = Field(..., description="Persisted strategy brief id")
+    decision: str = Field(..., description="approved|rejected|override_approved")
+    stage: str = Field("strategy", description="Workflow stage for the decision")
+    reason: Optional[str] = Field(None, description="Optional reviewer note")
+    created_at: Optional[str] = Field(None, description="Decision timestamp")
+
+
+class CandidateEvidenceRecord(BaseModel):
+    """One reusable, user-scoped evidence item for tailoring and interview prep."""
+    id: Optional[int] = Field(None, description="Persisted storage id")
+    kind: str = Field(..., description="achievement|case_study|narrative|translation_note|interview_seed")
+    title: str = Field(..., description="Short label for the evidence")
+    content: str = Field(..., description="Detailed evidence content")
+    tags: List[str] = Field(default_factory=list, description="Role/domain tags")
+    source: str = Field("user_manual", description="Where the evidence came from")
+    state: str = Field("confirmed", description="suggested|confirmed")
+    created_at: Optional[str] = Field(None, description="Creation timestamp")
+    updated_at: Optional[str] = Field(None, description="Update timestamp")
 
 
 class ReviewBundle(BaseModel):
-    """Structured review surfaces for authenticity, ATS, job match, and editorial quality"""
+    """Structured review surfaces for authenticity, ATS, job match, strategy alignment, and editorial quality"""
     authenticity: ReviewSection
     ats_parse: ReviewSection
     job_match: ReviewSection
+    strategy_alignment: ReviewSection
     editorial: ReviewSection
     overall: ReviewOverall
 

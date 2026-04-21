@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Iterable, Optional
 
 from ..models.agent_models import (
@@ -40,6 +41,29 @@ def _recommendations_from_issues(issues: Iterable[ReviewIssue]) -> list[str]:
         if issue.suggestion and issue.suggestion not in recommendations:
             recommendations.append(issue.suggestion)
     return recommendations
+
+
+def _directive_tokens(directive) -> list[str]:
+    raw_parts = [
+        token.strip().lower()
+        for token in re.split(r"[,;/]| and ", f"{directive.action} {directive.rationale}")
+        if token.strip() and len(token.strip()) > 4
+    ]
+    expanded: list[str] = []
+    for part in raw_parts:
+        expanded.append(part)
+        expanded.extend(
+            word
+            for word in re.split(r"[^a-z0-9+#.]+", part)
+            if len(word.strip()) > 4
+        )
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for token in expanded:
+        if token not in seen:
+            deduped.append(token)
+            seen.add(token)
+    return deduped[:8]
 
 
 def _build_authenticity_section(validation: Optional[ResumeValidation]) -> ReviewSection:
@@ -186,20 +210,155 @@ def _build_editorial_section(validation: Optional[ResumeValidation]) -> ReviewSe
     )
 
 
+def _build_strategy_alignment_section(tailored_resume: str, strategy_brief) -> ReviewSection:
+    if not strategy_brief:
+        return ReviewSection(
+            score=80,
+            verdict="informational",
+            summary="No strategy brief was available, so alignment could not be fully checked.",
+            issues=[],
+            recommendations=[],
+            metrics={"directive_count": 0, "matched_directives": 0},
+        )
+
+    resume_text = (tailored_resume or "").lower()
+    all_directives = list(getattr(strategy_brief, "tailoring_directives", []) or [])
+    directives = [directive for directive in all_directives if getattr(directive, "enabled", True)]
+    issues: list[ReviewIssue] = []
+    matched = 0
+    directive_trace: list[dict] = []
+    disabled_directives = 0
+    for directive in all_directives:
+        if not getattr(directive, "enabled", True):
+            disabled_directives += 1
+            directive_trace.append(
+                {
+                    "id": getattr(directive, "id", ""),
+                    "section": getattr(directive, "section", ""),
+                    "action": getattr(directive, "action", ""),
+                    "status": "skipped_disabled",
+                    "reason": "Disabled during strategy review.",
+                }
+            )
+
+    for directive in directives:
+        tokens = _directive_tokens(directive)
+        matched_tokens = [token for token in tokens if token in resume_text]
+        if matched_tokens:
+            matched += 1
+            directive_trace.append(
+                {
+                    "id": directive.id,
+                    "section": directive.section,
+                    "action": directive.action,
+                    "status": "applied",
+                    "reason": f'Observed in draft via terms like "{matched_tokens[0]}".',
+                }
+            )
+        else:
+            issues.append(
+                ReviewIssue(
+                    severity=Severity.WARNING,
+                    category="strategy_alignment",
+                    message=f'Strategy directive may be underrepresented: "{directive.action}"',
+                    suggestion="Review whether the final draft actually reflects this approved strategy move.",
+                    evidence=directive.section,
+                )
+            )
+            directive_trace.append(
+                {
+                    "id": directive.id,
+                    "section": directive.section,
+                    "action": directive.action,
+                    "status": "underrepresented",
+                    "reason": "Approved directive is not clearly reflected in the current draft.",
+                }
+            )
+
+    total = len(directives)
+    score = 100 if total == 0 else max(0, int(round((matched / max(total, 1)) * 100)))
+    if score >= 80:
+        verdict = "strong"
+        summary = "The final draft appears aligned with the approved strategy."
+    elif score >= 60:
+        verdict = "moderate"
+        summary = "The draft reflects some approved strategy, but not consistently."
+    else:
+        verdict = "weak"
+        summary = "Several approved strategy moves are not clearly reflected in the draft."
+
+    return ReviewSection(
+        score=score,
+        verdict=verdict,
+        summary=summary,
+        issues=issues,
+        recommendations=_recommendations_from_issues(issues),
+        metrics={
+            "directive_count": total,
+            "matched_directives": matched,
+            "disabled_directives": disabled_directives,
+            "directive_trace": directive_trace,
+        },
+    )
+
+
+def _build_overall_top_wins(authenticity: ReviewSection, ats_parse: ReviewSection, job_match: ReviewSection, strategy_alignment: ReviewSection, editorial: ReviewSection) -> list[str]:
+    wins: list[str] = []
+    if authenticity.verdict == "pass":
+        wins.append("Claims appear grounded in the source resume and confirmed profile.")
+    if job_match.score >= 75:
+        wins.append("Role alignment is strong enough to support this version.")
+    if ats_parse.score >= 80:
+        wins.append("ATS structure looks solid for parsing.")
+    if strategy_alignment.score >= 80:
+        wins.append("The draft reflects the approved strategy clearly.")
+    if editorial.score >= 80:
+        wins.append("The draft reads cleanly and presents experience with strong signal.")
+    return wins[:3]
+
+
+def _build_overall_top_risks(authenticity: ReviewSection, ats_parse: ReviewSection, job_match: ReviewSection, strategy_alignment: ReviewSection) -> list[str]:
+    risks: list[str] = []
+    if authenticity.issues:
+        risks.append(authenticity.issues[0].message)
+    if job_match.verdict == "weak" and job_match.issues:
+        risks.append(job_match.issues[0].message)
+    if ats_parse.verdict == "fail" and ats_parse.issues:
+        risks.append(ats_parse.issues[0].message)
+    if strategy_alignment.issues:
+        risks.append(strategy_alignment.issues[0].message)
+    return risks[:3]
+
+
+def _build_readiness_checks(authenticity: ReviewSection, ats_parse: ReviewSection, strategy_alignment: ReviewSection) -> list[str]:
+    checks: list[str] = []
+    if authenticity.issues:
+        checks.append("Re-check every risky claim or metric before sending.")
+    if ats_parse.verdict == "fail":
+        checks.append("Clean up ATS formatting hazards before exporting or submitting.")
+    if strategy_alignment.issues:
+        checks.append("Decide whether to refine the draft so the approved strategy is more visible.")
+    if not checks:
+        checks.append("No critical blockers remain. Final pass should just be a human sanity check.")
+    return checks[:3]
+
+
 def build_review_bundle(
     tailored_resume: str,
     validation: Optional[ResumeValidation] = None,
     ats_score=None,
     fit_evaluation=None,
     analyzed_jd=None,
+    strategy_brief=None,
 ) -> ReviewBundle:
     """Build a structured bundle that separates review semantics."""
     ats_parse = review_ats_parse(tailored_resume)
     authenticity = _build_authenticity_section(validation)
     job_match = _build_job_match_section(ats_score, fit_evaluation, analyzed_jd)
+    strategy_alignment = _build_strategy_alignment_section(tailored_resume, strategy_brief)
     editorial = _build_editorial_section(validation)
 
-    overall_score = int(round((authenticity.score * 0.35) + (ats_parse.score * 0.2) + (job_match.score * 0.25) + (editorial.score * 0.2)))
+    overall_score = int(round((authenticity.score * 0.3) + (ats_parse.score * 0.18) + (job_match.score * 0.22) + (strategy_alignment.score * 0.12) + (editorial.score * 0.18)))
     if authenticity.verdict == "fail":
         overall_verdict = "needs_edits"
         recommendation = "Needs edits before submitting"
@@ -221,15 +380,23 @@ def build_review_bundle(
         recommendation = "Needs edits before submitting"
         summary = "The resume is close, but there are still meaningful gaps to address."
 
+    top_wins = _build_overall_top_wins(authenticity, ats_parse, job_match, strategy_alignment, editorial)
+    top_risks = _build_overall_top_risks(authenticity, ats_parse, job_match, strategy_alignment)
+    readiness_checks = _build_readiness_checks(authenticity, ats_parse, strategy_alignment)
+
     return ReviewBundle(
         authenticity=authenticity,
         ats_parse=ats_parse,
         job_match=job_match,
+        strategy_alignment=strategy_alignment,
         editorial=editorial,
         overall=ReviewOverall(
             score=overall_score,
             verdict=overall_verdict,
             summary=summary,
             recommendation=recommendation,
+            top_wins=top_wins,
+            top_risks=top_risks,
+            readiness_checks=readiness_checks,
         ),
     )

@@ -32,14 +32,22 @@ from resume_agent.storage.google_docs import read_google_doc, read_resume_file, 
 from resume_agent.storage.google_drive_utils import list_google_docs, list_google_folders, get_file_metadata, GOOGLE_DOC_MIME
 from resume_agent.storage.user_context import reset_current_user, set_current_user
 from resume_agent.storage.user_store import (
+    add_job_strategy_event_for_user,
     clear_improved_resume_for_user,
+    find_job_strategy_brief_for_user,
     get_improved_resume_for_user,
+    get_job_strategy_brief_for_user,
+    get_user_evidence_records,
     get_quality_report_for_user,
     get_user_by_id,
     get_user_skill_records,
+    list_job_strategy_briefs_for_user,
+    list_job_strategy_events_for_user,
     replace_user_skill_records,
+    replace_user_evidence_records,
     save_improved_resume_for_user,
     save_quality_report_for_user,
+    update_job_strategy_brief_status_for_user,
 )
 from resume_agent.review.bundle_builder import build_review_bundle
 from resume_agent.utils.exceptions import GoogleAPIError
@@ -84,11 +92,12 @@ app.add_middleware(
 )
 
 # Mount modular routers (health, applications, google drive, auth + user skills)
-from api.routers import health_router, applications_router, google_drive_router, auth_router
+from api.routers import health_router, applications_router, google_drive_router, auth_router, discover_router
 app.include_router(health_router)
 app.include_router(applications_router)
 app.include_router(google_drive_router)
 app.include_router(auth_router)
+app.include_router(discover_router)
 
 
 @app.middleware("http")
@@ -224,6 +233,7 @@ class TailorResumeAPIRequest(BaseModel):
     preserve_sections: Optional[list[str]] = None  # Sections to preserve exactly
     resume_doc_id: Optional[str] = None  # Optional: specific resume doc ID (defaults to configured)
     save_folder_id: Optional[str] = None  # Optional: folder to save to (defaults to configured)
+    discovered_role_id: Optional[int] = None
 
 
 class EvaluateFitRequest(BaseModel):
@@ -260,6 +270,50 @@ class ApprovalDraftUpdateRequest(BaseModel):
     """Request to replace the current approval draft text after hunk-level edits."""
     approval_id: str
     tailored_resume: str
+
+
+class StrategyBriefUpdateRequest(BaseModel):
+    """Request to update the staged strategy brief before approval."""
+    approval_id: str
+    strategy_brief: Dict[str, Any]
+
+
+class JobStrategyEvaluateRequest(BaseModel):
+    company: Optional[str] = ""
+    job_title: Optional[str] = ""
+    jd_text: str
+    job_url: Optional[str] = None
+    resume_doc_id: Optional[str] = None
+
+
+class JobStrategyTailorRequest(BaseModel):
+    jd_text: Optional[str] = None
+    resume_doc_id: Optional[str] = None
+    tailoring_intensity: str = "medium"
+    preserve_sections: Optional[list[str]] = None
+    protected_entry_texts: Optional[list[str]] = None
+
+
+class JobStrategyRegenerateRequest(BaseModel):
+    jd_text: Optional[str] = None
+    section: str
+    resume_doc_id: Optional[str] = None
+
+
+class JobStrategyRebaselineRequest(BaseModel):
+    company: Optional[str] = None
+    job_title: Optional[str] = None
+    job_url: Optional[str] = None
+    jd_text: Optional[str] = None
+    resume_doc_id: Optional[str] = None
+
+
+class StrategyDecisionRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+class UserEvidenceRequest(BaseModel):
+    evidence: List[Dict[str, Any]]
 
 
 class QualityAnalysisRequest(BaseModel):
@@ -335,13 +389,90 @@ def serialize_review_bundle(review_bundle):
         "authenticity": serialize_section(review_bundle.authenticity),
         "ats_parse": serialize_section(review_bundle.ats_parse),
         "job_match": serialize_section(review_bundle.job_match),
+        "strategy_alignment": serialize_section(review_bundle.strategy_alignment),
         "editorial": serialize_section(review_bundle.editorial),
         "overall": {
             "score": review_bundle.overall.score,
             "verdict": review_bundle.overall.verdict,
             "summary": review_bundle.overall.summary,
             "recommendation": review_bundle.overall.recommendation,
+            "top_wins": review_bundle.overall.top_wins,
+            "top_risks": review_bundle.overall.top_risks,
+            "readiness_checks": review_bundle.overall.readiness_checks,
         },
+    }
+
+
+def serialize_strategy_brief(brief):
+    if not brief:
+        return None
+    evidence_items = list(brief.requirement_evidence or [])
+    gap_items = list(brief.gap_assessments or [])
+    evidence_sections = sorted({item.source_section for item in evidence_items if item.source_section})
+    blocker_reason_codes = sorted({item.reason_code for item in gap_items if getattr(item, "reason_code", None)})
+    return {
+        "id": brief.id,
+        "company": brief.company,
+        "job_title": brief.job_title,
+        "job_url": brief.job_url,
+        "jd_text": brief.jd_text,
+        "archetype": brief.archetype,
+        "target_alignment": getattr(brief, "target_alignment", "unranked"),
+        "role_summary": brief.role_summary,
+        "fit_score": brief.fit_score,
+        "should_apply": brief.should_apply,
+        "confidence": brief.confidence,
+        "gating_decision": brief.gating_decision,
+        "requirement_evidence": [
+            {
+                "requirement": item.requirement,
+                "status": item.status,
+                "evidence": item.evidence,
+                "source_section": item.source_section,
+            }
+            for item in brief.requirement_evidence
+        ],
+        "gap_assessments": [
+            {
+                "requirement": item.requirement,
+                "severity": item.severity,
+                "mitigation": item.mitigation,
+                "reason_code": getattr(item, "reason_code", None),
+            }
+            for item in brief.gap_assessments
+        ],
+        "positioning_strategy": brief.positioning_strategy,
+        "tailoring_directives": [
+            {
+                "id": item.id,
+                "section": item.section,
+                "action": item.action,
+                "rationale": item.rationale,
+                "enabled": item.enabled,
+            }
+            for item in brief.tailoring_directives
+        ],
+        "interview_seeds": brief.interview_seeds,
+        "risk_notes": brief.risk_notes,
+        "provenance": {
+            "matched_requirement_count": sum(1 for item in evidence_items if item.status == "matched"),
+            "adjacent_requirement_count": sum(1 for item in evidence_items if item.status == "adjacent"),
+            "gap_requirement_count": sum(1 for item in evidence_items if item.status == "gap"),
+            "evidence_sections": evidence_sections,
+            "blocker_reason_codes": blocker_reason_codes,
+            "sample_evidence": [
+                {
+                    "requirement": item.requirement,
+                    "status": item.status,
+                    "evidence": item.evidence,
+                    "source_section": item.source_section,
+                }
+                for item in evidence_items[:3]
+            ],
+        },
+        "approval_status": brief.approval_status,
+        "created_at": brief.created_at,
+        "updated_at": brief.updated_at,
     }
 
 
@@ -358,6 +489,7 @@ def serialize_tailor_result(result, approval_id=None):
         "ats_score": result.ats_score,
         "approval_required": result.approval_required,
         "approval_status": result.approval_status,
+        "approval_stage": getattr(result, "approval_stage", None),
         "approval_id": approval_id,
         "current_tailoring_iteration": result.current_tailoring_iteration,
         "doc_url": result.doc_url or "",
@@ -365,6 +497,20 @@ def serialize_tailor_result(result, approval_id=None):
         "application_id": result.application_id,
         "fit_score": result.evaluation.score if result.evaluation else None,
         "should_apply": result.evaluation.should_apply if result.evaluation else None,
+        "strategy_brief": serialize_strategy_brief(getattr(result, "strategy_brief", None)),
+        "strategy_brief_id": getattr(result, "strategy_brief_id", None),
+        "gating_decision": getattr(getattr(result, "strategy_brief", None), "gating_decision", None),
+    }
+
+
+def _serialize_strategy_detail(user_id: int, brief_id: int) -> Dict[str, Any]:
+    brief = get_job_strategy_brief_for_user(user_id, brief_id)
+    if not brief:
+        raise HTTPException(status_code=404, detail="Strategy brief not found")
+    from resume_agent.models.agent_models import JobStrategyBrief
+    return {
+        "strategy_brief": serialize_strategy_brief(JobStrategyBrief(**brief)),
+        "events": list_job_strategy_events_for_user(user_id, brief_id),
     }
 
 
@@ -460,6 +606,288 @@ async def evaluate_fit(request: EvaluateFitRequest, http_request: Request):
     except Exception as e:
         logger.error(f"Evaluate fit failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/job-strategy/evaluate")
+async def evaluate_job_strategy(request: JobStrategyEvaluateRequest, http_request: Request):
+    """Create or reuse a persisted strategy brief for the authenticated user."""
+    local_user = get_local_user_from_request(http_request)
+    llm_service = LLMService()
+    workflow_service = MultiAgentWorkflowService(
+        llm_service=llm_service,
+        google_services=get_google_services_from_request(http_request),
+    )
+    workflow_request = TailorResumeRequest(
+        company=request.company or "",
+        job_title=request.job_title or "",
+        jd_text=request.jd_text,
+        job_url=request.job_url,
+        resume_doc_id=request.resume_doc_id,
+        local_user_id=local_user["id"],
+        evaluate_first=True,
+    )
+    result = TailorResumeResult(current_step=WorkflowStep.LOADING_RESUME)
+    for step in [
+        WorkflowStep.LOADING_RESUME,
+        WorkflowStep.PARSING_RESUME,
+        WorkflowStep.EVALUATING_FIT,
+        WorkflowStep.BUILDING_STRATEGY,
+    ]:
+        result = workflow_service.execute_workflow_step(workflow_request, step, result)
+        if result.error:
+            raise HTTPException(status_code=500, detail=result.error)
+
+    add_job_strategy_event_for_user(
+        local_user["id"],
+        strategy_brief_id=result.strategy_brief_id,
+        event_type="strategy_brief_evaluated",
+        payload={"gating_decision": result.strategy_brief.gating_decision},
+    )
+    return {
+        **_serialize_strategy_detail(local_user["id"], result.strategy_brief_id),
+        "evaluation": serialize_evaluation(result.evaluation),
+    }
+
+
+@app.get("/api/job-strategy")
+async def list_job_strategies(http_request: Request, limit: int = 50):
+    local_user = get_local_user_from_request(http_request)
+    from resume_agent.models.agent_models import JobStrategyBrief
+
+    briefs = [
+        serialize_strategy_brief(JobStrategyBrief(**brief))
+        for brief in list_job_strategy_briefs_for_user(local_user["id"], limit=limit)
+    ]
+    return {"strategy_briefs": briefs}
+
+
+@app.get("/api/job-strategy/{brief_id}")
+async def get_job_strategy(brief_id: int, http_request: Request):
+    local_user = get_local_user_from_request(http_request)
+    return _serialize_strategy_detail(local_user["id"], brief_id)
+
+
+@app.post("/api/job-strategy/{brief_id}/approve")
+async def approve_job_strategy(brief_id: int, request: StrategyDecisionRequest, http_request: Request):
+    local_user = get_local_user_from_request(http_request)
+    updated = update_job_strategy_brief_status_for_user(local_user["id"], brief_id, "approved")
+    if not updated:
+        raise HTTPException(status_code=404, detail="Strategy brief not found")
+    add_job_strategy_event_for_user(
+        local_user["id"],
+        strategy_brief_id=brief_id,
+        event_type="strategy_approved",
+        payload={"reason": request.reason},
+    )
+    return _serialize_strategy_detail(local_user["id"], brief_id)
+
+
+@app.post("/api/job-strategy/{brief_id}/override")
+async def override_job_strategy(brief_id: int, request: StrategyDecisionRequest, http_request: Request):
+    local_user = get_local_user_from_request(http_request)
+    updated = update_job_strategy_brief_status_for_user(local_user["id"], brief_id, "override_approved")
+    if not updated:
+        raise HTTPException(status_code=404, detail="Strategy brief not found")
+    add_job_strategy_event_for_user(
+        local_user["id"],
+        strategy_brief_id=brief_id,
+        event_type="strategy_override_approved",
+        payload={"reason": request.reason},
+    )
+    return _serialize_strategy_detail(local_user["id"], brief_id)
+
+
+@app.post("/api/job-strategy/{brief_id}/duplicate")
+async def duplicate_job_strategy(brief_id: int, http_request: Request):
+    local_user = get_local_user_from_request(http_request)
+    stored = get_job_strategy_brief_for_user(local_user["id"], brief_id)
+    if not stored:
+        raise HTTPException(status_code=404, detail="Strategy brief not found")
+    cloned = dict(stored)
+    cloned.pop("id", None)
+    cloned["approval_status"] = "pending"
+    cloned["created_at"] = None
+    cloned["updated_at"] = None
+    cloned["role_summary"] = cloned.get("role_summary") or "Duplicated strategy brief pending review."
+    from resume_agent.models.agent_models import JobStrategyBrief
+
+    duplicated = StrategyBriefService(LLMService()).persist_brief(
+        local_user["id"],
+        JobStrategyBrief(**cloned),
+    )
+    add_job_strategy_event_for_user(
+        local_user["id"],
+        strategy_brief_id=duplicated.id,
+        event_type="strategy_duplicated",
+        payload={"source_brief_id": brief_id},
+    )
+    return _serialize_strategy_detail(local_user["id"], duplicated.id)
+
+
+@app.post("/api/job-strategy/{brief_id}/tailor")
+async def tailor_from_job_strategy(brief_id: int, request: JobStrategyTailorRequest, http_request: Request):
+    local_user = get_local_user_from_request(http_request)
+    stored = get_job_strategy_brief_for_user(local_user["id"], brief_id)
+    if not stored:
+        raise HTTPException(status_code=404, detail="Strategy brief not found")
+    from resume_agent.models.agent_models import JobStrategyBrief
+
+    strategy_brief = JobStrategyBrief(**stored)
+    if strategy_brief.approval_status not in {"approved", "override_approved"}:
+        raise HTTPException(status_code=400, detail="Strategy brief must be approved before tailoring")
+
+    workflow_service = MultiAgentWorkflowService(
+        llm_service=LLMService(),
+        google_services=get_google_services_from_request(http_request),
+    )
+    workflow_request = TailorResumeRequest(
+        company=strategy_brief.company,
+        job_title=strategy_brief.job_title,
+        jd_text=request.jd_text or strategy_brief.jd_text or "",
+        job_url=strategy_brief.job_url,
+        resume_doc_id=request.resume_doc_id,
+        local_user_id=local_user["id"],
+        tailoring_intensity=request.tailoring_intensity,
+        preserve_sections=request.preserve_sections,
+        protected_entry_texts=request.protected_entry_texts,
+    )
+    if not workflow_request.jd_text:
+        raise HTTPException(status_code=400, detail="Saved strategy brief is missing canonical JD text")
+    result = TailorResumeResult(
+        current_step=WorkflowStep.LOADING_RESUME,
+        strategy_brief=strategy_brief,
+        strategy_brief_id=strategy_brief.id,
+        approval_stage="final_resume",
+        approval_status="approved",
+    )
+    for step in [
+        WorkflowStep.LOADING_RESUME,
+        WorkflowStep.PARSING_RESUME,
+        WorkflowStep.EVALUATING_FIT,
+        WorkflowStep.TAILORING_RESUME,
+        WorkflowStep.VALIDATING_RESUME,
+    ]:
+        result.strategy_brief = strategy_brief
+        result.strategy_brief_id = strategy_brief.id
+        result.approval_stage = "final_resume"
+        result.approval_status = "approved"
+        result = workflow_service.execute_workflow_step(workflow_request, step, result)
+        if result.error:
+            raise HTTPException(status_code=500, detail=result.error)
+
+    add_job_strategy_event_for_user(
+        local_user["id"],
+        strategy_brief_id=brief_id,
+        event_type="strategy_tailored",
+        payload={"quality_score": getattr(getattr(result, "validation", None), "quality_score", None)},
+    )
+    return {"result": serialize_tailor_result(result)}
+
+
+@app.post("/api/job-strategy/{brief_id}/regenerate-section")
+async def regenerate_job_strategy_section(brief_id: int, request: JobStrategyRegenerateRequest, http_request: Request):
+    local_user = get_local_user_from_request(http_request)
+    stored = get_job_strategy_brief_for_user(local_user["id"], brief_id)
+    if not stored:
+        raise HTTPException(status_code=404, detail="Strategy brief not found")
+    from resume_agent.models.agent_models import JobStrategyBrief
+
+    brief = JobStrategyBrief(**stored)
+    workflow_service = MultiAgentWorkflowService(
+        llm_service=LLMService(),
+        google_services=get_google_services_from_request(http_request),
+    )
+    workflow_request = TailorResumeRequest(
+        company=brief.company,
+        job_title=brief.job_title,
+        jd_text=request.jd_text or brief.jd_text or "",
+        job_url=brief.job_url,
+        resume_doc_id=request.resume_doc_id,
+        local_user_id=local_user["id"],
+        evaluate_first=True,
+    )
+    if not workflow_request.jd_text:
+        raise HTTPException(status_code=400, detail="Saved strategy brief is missing canonical JD text")
+    result = TailorResumeResult(current_step=WorkflowStep.LOADING_RESUME)
+    for step in [WorkflowStep.LOADING_RESUME, WorkflowStep.PARSING_RESUME, WorkflowStep.EVALUATING_FIT]:
+        result = workflow_service.execute_workflow_step(workflow_request, step, result)
+        if result.error:
+            raise HTTPException(status_code=500, detail=result.error)
+
+    regenerated = workflow_service.strategy_brief_service.regenerate_section(
+        brief=brief,
+        section=request.section,
+        parsed_resume=result.parsed_resume,
+        analyzed_jd=result.analyzed_jd,
+        fit_evaluation=result.evaluation,
+        profile_context=result.profile_context,
+    )
+    regenerated = workflow_service.strategy_brief_service.persist_brief(local_user["id"], regenerated)
+    add_job_strategy_event_for_user(
+        local_user["id"],
+        strategy_brief_id=brief_id,
+        event_type="strategy_section_regenerated",
+        payload={"section": request.section},
+    )
+    return _serialize_strategy_detail(local_user["id"], regenerated.id)
+
+
+@app.post("/api/job-strategy/{brief_id}/rebaseline")
+async def rebaseline_job_strategy(brief_id: int, request: JobStrategyRebaselineRequest, http_request: Request):
+    local_user = get_local_user_from_request(http_request)
+    stored = get_job_strategy_brief_for_user(local_user["id"], brief_id)
+    if not stored:
+        raise HTTPException(status_code=404, detail="Strategy brief not found")
+    from resume_agent.models.agent_models import JobStrategyBrief
+
+    existing = JobStrategyBrief(**stored)
+    workflow_service = MultiAgentWorkflowService(
+        llm_service=LLMService(),
+        google_services=get_google_services_from_request(http_request),
+    )
+    workflow_request = TailorResumeRequest(
+        company=request.company or existing.company,
+        job_title=request.job_title or existing.job_title,
+        jd_text=request.jd_text or existing.jd_text or "",
+        job_url=request.job_url or existing.job_url,
+        resume_doc_id=request.resume_doc_id,
+        local_user_id=local_user["id"],
+        evaluate_first=True,
+    )
+    if not workflow_request.jd_text:
+        raise HTTPException(status_code=400, detail="Strategy brief is missing canonical JD text")
+
+    result = TailorResumeResult(current_step=WorkflowStep.LOADING_RESUME)
+    for step in [WorkflowStep.LOADING_RESUME, WorkflowStep.PARSING_RESUME, WorkflowStep.EVALUATING_FIT]:
+        result = workflow_service.execute_workflow_step(workflow_request, step, result)
+        if result.error:
+            raise HTTPException(status_code=500, detail=result.error)
+
+    rebuilt = workflow_service.strategy_brief_service.build_brief(
+        company=workflow_request.company,
+        job_title=workflow_request.job_title,
+        job_url=workflow_request.job_url,
+        jd_text=workflow_request.jd_text,
+        parsed_resume=result.parsed_resume,
+        analyzed_jd=result.analyzed_jd,
+        fit_evaluation=result.evaluation,
+        profile_context=result.profile_context,
+    )
+    rebuilt.id = existing.id
+    rebuilt.approval_status = "pending"
+    rebuilt.created_at = existing.created_at
+    rebuilt = workflow_service.strategy_brief_service.persist_brief(local_user["id"], rebuilt)
+    add_job_strategy_event_for_user(
+        local_user["id"],
+        strategy_brief_id=brief_id,
+        event_type="strategy_rebaselined",
+        payload={
+            "company": rebuilt.company,
+            "job_title": rebuilt.job_title,
+            "jd_length": len(rebuilt.jd_text or ""),
+        },
+    )
+    return _serialize_strategy_detail(local_user["id"], rebuilt.id)
 
 
 @app.post("/api/extract-jd")
@@ -1067,7 +1495,7 @@ async def tailor_resume_stream(request: TailorResumeAPIRequest, http_request: Re
                 job_url=request.job_url,
                 evaluate_first=request.evaluate_first or request.evaluate_only,
                 evaluate_only=request.evaluate_only,
-                track_application=request.track_application,
+                track_application=(request.track_application and not request.discovered_role_id),
                 tailoring_intensity=request.tailoring_intensity,
                 sections_to_tailor=request.sections_to_tailor,
                 refinement_feedback=request.refinement_feedback,
@@ -1078,19 +1506,14 @@ async def tailor_resume_stream(request: TailorResumeAPIRequest, http_request: Re
                 resume_doc_id=request.resume_doc_id,
                 save_folder_id=request.save_folder_id,
                 local_user_id=(get_local_user_from_request(http_request).get("id") if get_session_data(http_request) else None),
+                discovered_role_id=request.discovered_role_id,
             )
             
-            # Define workflow steps (include fit evaluation if requested)
             steps = [
                 (WorkflowStep.LOADING_RESUME, "📥 Loading resume from Google Docs..."),
+                (WorkflowStep.PARSING_RESUME, "🔍 Parsing resume and analyzing job description..."),
+                (WorkflowStep.EVALUATING_FIT, "📊 Evaluating job fit..."),
             ]
-            
-            # Add parsing and fit evaluation steps if requested
-            if request.evaluate_first or request.evaluate_only:
-                steps.extend([
-                    (WorkflowStep.PARSING_RESUME, "🔍 Parsing resume and analyzing job description..."),
-                    (WorkflowStep.EVALUATING_FIT, "📊 Evaluating job fit..."),
-                ])
 
             if not request.evaluate_only:
                 validation_message = (
@@ -1099,9 +1522,11 @@ async def tailor_resume_stream(request: TailorResumeAPIRequest, http_request: Re
                     else "🔍 Checking cached resume quality..."
                 )
                 steps.extend([
+                    (WorkflowStep.BUILDING_STRATEGY, "🧭 Building job strategy brief..."),
+                    (WorkflowStep.PREVIEW, "👀 Waiting for strategy approval..."),
                     (WorkflowStep.TAILORING_RESUME, "✂️ Tailoring resume with AI..."),
                     (WorkflowStep.VALIDATING_RESUME, validation_message),
-                    (WorkflowStep.PREVIEW, "👁️ Preparing preview..."),
+                    (WorkflowStep.PREVIEW, "👁️ Waiting for final resume approval..."),
                 ])
             
             # Initialize result and persist request metadata so approve-and-save has resume_doc_id/save_folder_id
@@ -1117,68 +1542,6 @@ async def tailor_resume_stream(request: TailorResumeAPIRequest, http_request: Re
             
             # Execute steps with progress updates
             for i, (step, description) in enumerate(steps):
-                # Skip PREVIEW step if approval already required (set by VALIDATING_RESUME)
-                if step == WorkflowStep.PREVIEW and result.approval_required and result.approval_status == "pending":
-                    # Just send step start and complete for UI, then send approval event
-                    progress_data = {
-                        "type": "step_start",
-                        "step": step.value,
-                        "message": description,
-                        "progress": i / total_steps,
-                        "step_number": i + 1,
-                        "total_steps": total_steps
-                    }
-                    yield f"data: {json.dumps(progress_data)}\n\n"
-                    
-                    # Send step complete
-                    complete_data = {
-                        "type": "step_complete",
-                        "step": step.value,
-                        "message": f"✅ {description.replace('...', ' completed')}",
-                        "progress": (i + 1) / total_steps,
-                        "step_number": i + 1,
-                        "total_steps": total_steps
-                    }
-                    yield f"data: {json.dumps(complete_data)}\n\n"
-                    
-                    # Generate approval ID and send approval event
-                    import uuid
-                    approval_id = str(uuid.uuid4())
-                    approval_storage.store(approval_id, result)
-                    
-                    # Get LLM acknowledgment for tailoring completion
-                    llm_acknowledgment = None
-                    try:
-                        from resume_agent.agents.resume_tailor import get_llm_acknowledgment
-                        llm_acknowledgment = get_llm_acknowledgment(llm_service, "tailored")
-                    except Exception as e:
-                        logger.warning(f"Failed to get LLM acknowledgment: {e}")
-                    
-                    # Check fit evaluation and warn if low
-                    fit_warning = None
-                    if result.evaluation:
-                        if result.evaluation.score < 5 or not result.evaluation.should_apply:
-                            fit_warning = {
-                                "score": result.evaluation.score,
-                                "should_apply": result.evaluation.should_apply,
-                                "message": f"⚠️ Low fit score ({result.evaluation.score}/10). This role may not be a good match. Review the evaluation before proceeding.",
-                                "missing_areas": result.evaluation.missing_areas or []
-                            }
-                    
-                    approval_data = {
-                        "type": "approval_required",
-                        "approval_id": approval_id,
-                        "message": "Resume tailored. Please review and approve to continue.",
-                        "llm_acknowledgment": llm_acknowledgment,
-                        "fit_warning": fit_warning,
-                        "progress": 1.0,  # Show 100% when approval is required (all tailoring steps done)
-                        "step_number": total_steps,
-                        "total_steps": total_steps,
-                        "result": serialize_tailor_result(result, approval_id)
-                    }
-                    yield f"data: {json.dumps(approval_data)}\n\n"
-                    return  # Stop here, wait for approval
-                
                 # Send step start
                 progress_data = {
                     "type": "step_start",
@@ -1233,51 +1596,7 @@ async def tailor_resume_stream(request: TailorResumeAPIRequest, http_request: Re
                     yield f"data: {json.dumps(error_data)}\n\n"
                     break
                 
-                # Check if workflow was stopped due to poor fit
-                if getattr(result, 'poor_fit_stopped', False):
-                    # Send poor fit notification with evaluation details
-                    poor_fit_data = {
-                        "type": "poor_fit_stopped",
-                        "step": step.value,
-                        "message": "⚠️ Workflow stopped: Poor job fit detected",
-                        "progress": (i + 1) / total_steps,
-                        "evaluation": {
-                            "score": result.evaluation.score if result.evaluation else None,
-                            "should_apply": result.evaluation.should_apply if result.evaluation else False,
-                            "matching_areas": result.evaluation.matching_areas if result.evaluation else [],
-                            "missing_areas": result.evaluation.missing_areas if result.evaluation else [],
-                            "recommendations": result.evaluation.recommendations if result.evaluation else [],
-                            "confidence": result.evaluation.confidence if result.evaluation else None,
-                            "reasoning": result.evaluation.reasoning if result.evaluation else None
-                        } if result.evaluation else None,
-                        "parsed_resume": {
-                            "all_skills": result.parsed_resume.all_skills if result.parsed_resume else [],
-                            "total_years_experience": result.parsed_resume.total_years_experience if result.parsed_resume else None
-                        } if result.parsed_resume else None,
-                        "analyzed_jd": {
-                            "required_skills": result.analyzed_jd.required_skills if result.analyzed_jd else [],
-                            "preferred_skills": result.analyzed_jd.preferred_skills if result.analyzed_jd else [],
-                            "required_experience_years": result.analyzed_jd.required_experience_years if result.analyzed_jd else None
-                        } if result.analyzed_jd else None
-                    }
-                    yield f"data: {json.dumps(poor_fit_data)}\n\n"
-                    return  # Stop workflow
-                
-                # Check if approval is required (after VALIDATING_RESUME or PREVIEW)
-                # Also check if we're at PREVIEW step and have a tailored resume (approval should be required)
-                if (result.approval_required and result.approval_status == "pending") or \
-                   (step == WorkflowStep.PREVIEW and result.tailored_resume and result.validation):
-                    # Ensure approval flags are set
-                    if not result.approval_required:
-                        result.approval_required = True
-                        result.approval_status = "pending"
-                    
-                    # Generate approval ID
-                    import uuid
-                    approval_id = str(uuid.uuid4())
-                    approval_storage.store(approval_id, result)
-                    
-                    # Send step complete for the current step first
+                if result.approval_required and result.approval_status == "pending":
                     complete_data = {
                         "type": "step_complete",
                         "step": step.value,
@@ -1287,19 +1606,46 @@ async def tailor_resume_stream(request: TailorResumeAPIRequest, http_request: Re
                         "total_steps": total_steps
                     }
                     yield f"data: {json.dumps(complete_data)}\n\n"
-                    
-                    # Send approval required event
+
+                    import uuid
+                    approval_id = str(uuid.uuid4())
+                    approval_storage.store(approval_id, result)
+
+                    fit_warning = None
+                    if result.evaluation and (result.evaluation.score < 5 or not result.evaluation.should_apply):
+                        fit_warning = {
+                            "score": result.evaluation.score,
+                            "should_apply": result.evaluation.should_apply,
+                            "message": f"⚠️ Low fit score ({result.evaluation.score}/10). This role may not be a good match. Explicit approval is required to continue.",
+                            "missing_areas": result.evaluation.missing_areas or []
+                        }
+
+                    llm_acknowledgment = None
+                    if result.approval_stage == "final_resume":
+                        try:
+                            from resume_agent.agents.resume_tailor import get_llm_acknowledgment
+                            llm_acknowledgment = get_llm_acknowledgment(llm_service, "tailored")
+                        except Exception as e:
+                            logger.warning(f"Failed to get LLM acknowledgment: {e}")
+
                     approval_data = {
                         "type": "approval_required",
                         "approval_id": approval_id,
-                        "message": "Resume tailored. Please review and approve to continue.",
-                        "progress": 1.0,  # Show 100% when approval is required (all tailoring steps done)
-                        "step_number": total_steps,
+                        "approval_stage": result.approval_stage,
+                        "message": (
+                            "Strategy brief ready. Review and approve before generating the resume draft."
+                            if result.approval_stage == "strategy"
+                            else "Resume draft ready. Review and approve before saving and tracking."
+                        ),
+                        "llm_acknowledgment": llm_acknowledgment,
+                        "fit_warning": fit_warning,
+                        "progress": (i + 1) / total_steps,
+                        "step_number": i + 1,
                         "total_steps": total_steps,
                         "result": serialize_tailor_result(result, approval_id)
                     }
                     yield f"data: {json.dumps(approval_data)}\n\n"
-                    return  # Stop here, wait for approval
+                    return
                 
                 # Send step complete
                 complete_data = {
@@ -1432,7 +1778,7 @@ async def tailor_resume_stream(request: TailorResumeAPIRequest, http_request: Re
 
 @app.post("/api/approve-resume")
 async def approve_resume(request: ApprovalRequest, http_request: Request):
-    """Approve or reject a tailored resume and continue workflow"""
+    """Approve or reject the current workflow gate and continue if appropriate."""
     result = approval_storage.get(request.approval_id)
     if result is None:
         logger.warning(
@@ -1447,21 +1793,28 @@ async def approve_resume(request: ApprovalRequest, http_request: Request):
             ),
         )
     
+    local_user_id = (get_local_user_from_request(http_request).get("id") if get_session_data(http_request) else None)
+
     if not request.approved:
-        # Rejected - remove from storage and return
+        workflow_service = MultiAgentWorkflowService(google_services=get_google_services_from_request(http_request))
+        if getattr(result, "approval_stage", None) == "strategy":
+            workflow_service.mark_strategy_approval(result, approved=False, user_id=local_user_id)
         approval_storage.delete(request.approval_id)
         return {
             "success": True,
             "approved": False,
-            "message": "Resume tailoring rejected"
+            "approval_stage": getattr(result, "approval_stage", None),
+            "message": (
+                "Strategy brief rejected"
+                if getattr(result, "approval_stage", None) == "strategy"
+                else "Resume tailoring rejected"
+            ),
         }
     
-    # Approved - continue workflow
     try:
         google_services = get_google_services_from_request(http_request)
         workflow_service = MultiAgentWorkflowService(google_services=google_services)
-        
-        # Create workflow request from stored result (includes resume_doc_id/save_folder_id so save works)
+
         workflow_request = TailorResumeRequest(
             company=result.company or "",
             job_title=result.job_title or "",
@@ -1470,21 +1823,57 @@ async def approve_resume(request: ApprovalRequest, http_request: Request):
             track_application=True,
             resume_doc_id=result.resume_doc_id,
             save_folder_id=result.save_folder_id,
-            local_user_id=(get_local_user_from_request(http_request).get("id") if get_session_data(http_request) else None),
+            local_user_id=local_user_id,
         )
-        
-        # Continue with saving steps
+
+        if getattr(result, "approval_stage", None) == "strategy":
+            overridden = bool(
+                getattr(result, "strategy_brief", None)
+                and result.strategy_brief.gating_decision == "stop_and_ask"
+            )
+            workflow_service.mark_strategy_approval(
+                result,
+                approved=True,
+                overridden=overridden,
+                user_id=local_user_id,
+            )
+            result.approval_required = False
+            result.approval_status = "approved"
+
+            for step in [WorkflowStep.TAILORING_RESUME, WorkflowStep.VALIDATING_RESUME]:
+                result = workflow_service.execute_workflow_step(workflow_request, step, result)
+                if result.error:
+                    break
+
+            if result.error:
+                raise HTTPException(status_code=502, detail=result.error)
+
+            approval_storage.store(request.approval_id, result)
+            return {
+                "success": True,
+                "approved": True,
+                "approval_required": True,
+                "approval_id": request.approval_id,
+                "approval_stage": result.approval_stage,
+                "result": serialize_tailor_result(result, request.approval_id),
+            }
+
         result.approval_status = "approved"
         result.approval_required = False
-        
-        # Execute saving steps
+        if local_user_id and result.strategy_brief_id:
+            add_job_strategy_event_for_user(
+                local_user_id,
+                strategy_brief_id=result.strategy_brief_id,
+                event_type="final_resume_approved",
+                payload={"stage": "final_resume"},
+            )
+
         for step in [WorkflowStep.SAVING_TO_GOOGLE, WorkflowStep.GENERATING_DIFF, WorkflowStep.TRACKING_APPLICATION]:
             result = workflow_service.execute_workflow_step(workflow_request, step, result)
             if result.error:
                 break
-        
+
         if result.error:
-            # Save/step failed - return error so client can show it; keep approval so user can retry after fixing (e.g. re-auth)
             err = result.error
             if "invalid_grant" in err.lower():
                 err = (
@@ -1492,16 +1881,26 @@ async def approve_resume(request: ApprovalRequest, http_request: Request):
                     "Please sign in again with Google (e.g. from the app or Drive picker), then try Approve and save again."
                 )
             raise HTTPException(status_code=502, detail=err)
-        
-        # Remove from storage
+
         approval_storage.delete(request.approval_id)
-        
+        if local_user_id and result.strategy_brief_id:
+            add_job_strategy_event_for_user(
+                local_user_id,
+                strategy_brief_id=result.strategy_brief_id,
+                event_type="final_resume_saved",
+                payload={
+                    "doc_url": result.doc_url,
+                    "application_id": result.application_id,
+                },
+            )
         return {
             "success": True,
             "approved": True,
+            "approval_stage": "final_resume",
             "result": {
                 "doc_url": result.doc_url,
-                "application_id": result.application_id
+                "application_id": result.application_id,
+                "strategy_brief_id": result.strategy_brief_id,
             }
         }
     except HTTPException:
@@ -1517,12 +1916,55 @@ async def approve_resume(request: ApprovalRequest, http_request: Request):
         raise HTTPException(status_code=500, detail=err)
 
 
+@app.post("/api/update-strategy-brief")
+async def update_strategy_brief(request: StrategyBriefUpdateRequest, http_request: Request):
+    """Persist strategy-brief edits made during the strategy approval stage."""
+    result = approval_storage.get(request.approval_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Approval request not found or expired")
+    if getattr(result, "approval_stage", None) != "strategy":
+        raise HTTPException(status_code=400, detail="Strategy brief can only be edited during the strategy approval stage")
+    if not getattr(result, "strategy_brief", None):
+        raise HTTPException(status_code=400, detail="No strategy brief is available for this approval")
+
+    try:
+        from resume_agent.models.agent_models import JobStrategyBrief
+        updated_brief = JobStrategyBrief(**request.strategy_brief)
+        result.strategy_brief = updated_brief
+        result.strategy_brief_id = updated_brief.id
+        approval_storage.store(request.approval_id, result)
+
+        local_user_id = (get_local_user_from_request(http_request).get("id") if get_session_data(http_request) else None)
+        if local_user_id and result.strategy_brief_id:
+            workflow_service = MultiAgentWorkflowService(google_services=get_google_services_from_request(http_request))
+            workflow_service.strategy_brief_service.persist_brief(local_user_id, updated_brief)
+            add_job_strategy_event_for_user(
+                local_user_id,
+                strategy_brief_id=result.strategy_brief_id,
+                event_type="strategy_brief_updated",
+                payload={"source": "approval_stage_edit"},
+            )
+
+        return {
+            "success": True,
+            "approval_id": request.approval_id,
+            "result": serialize_tailor_result(result, request.approval_id),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating strategy brief: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/refine-resume")
 async def refine_resume(request: RefinementRequest, http_request: Request):
     """Refine a tailored resume based on feedback"""
     original_result = approval_storage.get(request.approval_id)
     if original_result is None:
         raise HTTPException(status_code=404, detail="Approval request not found or expired")
+    if getattr(original_result, "approval_stage", None) != "final_resume":
+        raise HTTPException(status_code=400, detail="Resume refinement is only available during final resume review")
     
     try:
         google_services = get_google_services_from_request(http_request)
@@ -1600,6 +2042,7 @@ async def refine_resume(request: RefinementRequest, http_request: Request):
                     ats_score=getattr(refined_result, "ats_score_object", None) or getattr(original_result, "ats_score_object", None),
                     fit_evaluation=original_result.evaluation,
                     analyzed_jd=original_result.analyzed_jd,
+                    strategy_brief=original_result.strategy_brief,
                 )
             except Exception as e:
                 logger.warning(f"Validation failed during refinement: {e}")
@@ -1641,6 +2084,8 @@ async def update_approval_draft(request: ApprovalDraftUpdateRequest, http_reques
     result = approval_storage.get(request.approval_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Approval request not found or expired")
+    if getattr(result, "approval_stage", None) != "final_resume":
+        raise HTTPException(status_code=400, detail="Draft editing is only available during final resume review")
 
     try:
         workflow_service = MultiAgentWorkflowService(google_services=get_google_services_from_request(http_request))
@@ -1682,6 +2127,7 @@ async def update_approval_draft(request: ApprovalDraftUpdateRequest, http_reques
                     ats_score=getattr(result, "ats_score_object", None),
                     fit_evaluation=result.evaluation,
                     analyzed_jd=result.analyzed_jd,
+                    strategy_brief=result.strategy_brief,
                 )
             except Exception as e:
                 logger.warning(f"Validation failed during approval draft update: {e}")

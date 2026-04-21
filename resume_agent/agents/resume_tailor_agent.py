@@ -55,6 +55,7 @@ class ResumeTailorAgent:
         analyzed_jd: "AnalyzedJD",
         fit_evaluation: "FitEvaluation",
         ats_score: Optional["ATSScore"] = None,
+        strategy_brief=None,
         intensity: str = "medium",
         refinement_feedback: Optional[str] = None,
         current_draft_text: Optional[str] = None,
@@ -84,7 +85,8 @@ class ResumeTailorAgent:
             parsed_resume,
             analyzed_jd,
             fit_evaluation,
-            ats_score
+            ats_score,
+            strategy_brief=strategy_brief,
         )
         
         # Get user memory and clarifications
@@ -323,7 +325,8 @@ Return only the rewritten entry.""")
         parsed_resume: "ParsedResume",
         analyzed_jd: "AnalyzedJD",
         fit_evaluation: "FitEvaluation",
-        ats_score: Optional["ATSScore"]
+        ats_score: Optional["ATSScore"],
+        strategy_brief=None,
     ) -> str:
         """Build concise context for tailoring (optimized to avoid token limits)"""
         context_parts = []
@@ -363,6 +366,71 @@ Return only the rewritten entry.""")
                 if len(ats_score.missing_keywords) > 5:
                     missing_summary += f" (+{len(ats_score.missing_keywords) - 5} more)"
                 context_parts.append(f"- Missing Keywords: {missing_summary}")
+
+        if strategy_brief:
+            context_parts.append("\nAPPROVED STRATEGY BRIEF:")
+            context_parts.append(f"- Archetype: {getattr(strategy_brief, 'archetype', 'general')}")
+            context_parts.append(f"- Role Summary: {getattr(strategy_brief, 'role_summary', '')}")
+
+            positioning = [
+                str(item).strip()
+                for item in getattr(strategy_brief, "positioning_strategy", [])[:5]
+                if str(item).strip()
+            ]
+            if positioning:
+                context_parts.append("- Positioning Themes:")
+                context_parts.extend(f"  - {item}" for item in positioning)
+
+            enabled_directives = [
+                directive
+                for directive in getattr(strategy_brief, "tailoring_directives", [])
+                if getattr(directive, "enabled", True)
+            ]
+            if enabled_directives:
+                context_parts.append("- Approved Tailoring Directives:")
+                for directive in enabled_directives[:8]:
+                    rationale = f" ({directive.rationale})" if getattr(directive, "rationale", "") else ""
+                    context_parts.append(f"  - [{directive.section}] {directive.action}{rationale}")
+
+            disabled_directives = [
+                directive
+                for directive in getattr(strategy_brief, "tailoring_directives", [])
+                if not getattr(directive, "enabled", True)
+            ]
+            if disabled_directives:
+                context_parts.append("- Disabled Directives (do not apply):")
+                for directive in disabled_directives[:8]:
+                    context_parts.append(f"  - [{directive.section}] {directive.action}")
+
+            gap_assessments = getattr(strategy_brief, "gap_assessments", [])[:6]
+            if gap_assessments:
+                context_parts.append("- Gap Mitigation Policy:")
+                for gap in gap_assessments:
+                    context_parts.append(
+                        f"  - {gap.requirement} [{gap.severity}]: {gap.mitigation or 'Acknowledge the gap and use only adjacent evidence.'}"
+                    )
+
+            unsupported_requirements = [
+                evidence.requirement
+                for evidence in getattr(strategy_brief, "requirement_evidence", [])
+                if getattr(evidence, "status", "") == "gap"
+            ]
+            if unsupported_requirements:
+                unsupported_summary = ", ".join(unsupported_requirements[:8])
+                context_parts.append(f"- Do Not Add Unsupported Claims For: {unsupported_summary}")
+
+            risk_notes = [
+                str(item).strip()
+                for item in getattr(strategy_brief, "risk_notes", [])[:5]
+                if str(item).strip()
+            ]
+            if risk_notes:
+                context_parts.append("- Risk Notes:")
+                context_parts.extend(f"  - {item}" for item in risk_notes)
+
+            context_parts.append(
+                "- Truthfulness Rule: use the strategy to choose emphasis and wording, but never fabricate unsupported technologies, metrics, or equivalent experience."
+            )
         
         return "\n".join(context_parts)
     

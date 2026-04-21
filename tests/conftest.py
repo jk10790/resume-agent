@@ -16,8 +16,10 @@ def _test_db_path(tmp_path_factory: pytest.TempPathFactory) -> str:
 def _patch_global_db_path(_test_db_path: str):
     # Patch the module-level DB_PATH used by get_db_connection() so tests don't
     # mutate the repo's real applications.db.
+    from resume_agent.tracking import application_tracker
     from resume_agent.storage import user_store
 
+    application_tracker.DB_PATH = _test_db_path
     user_store.DB_PATH = _test_db_path
 
     # Some code paths read this env var directly; keep it consistent.
@@ -37,6 +39,12 @@ def _clear_sqlite_state():
             "user_quality_reports",
             "user_metric_inventory",
             "user_improved_resumes",
+            "applications",
+            "job_strategy_events",
+            "job_strategy_briefs",
+            "discovered_role_feedback",
+            "discovered_roles",
+            "user_evidence_inventory",
             "cache_entries",
         ):
             try:

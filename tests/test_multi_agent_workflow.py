@@ -17,8 +17,11 @@ from resume_agent.models.agent_models import (
     ParsedResume,
     AnalyzedJD,
     FitAnalysis,
-    ATSScore
+    ATSScore,
+    JobStrategyBrief,
+    StrategyDirective,
 )
+from resume_agent.models.resume import FitEvaluation
 
 
 @pytest.fixture
@@ -156,6 +159,66 @@ def mock_llm_service():
     service.invoke_structured = Mock(side_effect=mock_invoke_structured)
     
     return service
+
+
+def test_building_strategy_links_discovered_role(monkeypatch, mock_llm_service):
+    service = MultiAgentWorkflowService(llm_service=mock_llm_service, google_services=None)
+
+    brief = JobStrategyBrief(
+        id=77,
+        company="Acme",
+        job_title="Applied AI Engineer",
+        jd_text="JD text",
+        archetype="applied_ai_llmops",
+        fit_score=8,
+        should_apply=True,
+        confidence=0.9,
+        role_summary="Good fit.",
+        tailoring_directives=[StrategyDirective(id="dir_1", section="summary", action="Lead with AI systems work")],
+    )
+
+    service.strategy_brief_service.find_existing_brief = Mock(return_value=None)
+    service.strategy_brief_service.build_brief = Mock(return_value=brief)
+    service.strategy_brief_service.persist_brief = Mock(return_value=brief)
+
+    linked = {}
+    monkeypatch.setattr(
+        "resume_agent.services.multi_agent_workflow.link_discovered_role_strategy_brief_for_user",
+        lambda user_id, role_id, strategy_brief_id: linked.update(
+            {"user_id": user_id, "role_id": role_id, "strategy_brief_id": strategy_brief_id}
+        ),
+    )
+    monkeypatch.setattr(
+        "resume_agent.services.multi_agent_workflow.add_job_strategy_event_for_user",
+        lambda *args, **kwargs: None,
+    )
+
+    request = TailorResumeRequest(
+        company="Acme",
+        job_title="Applied AI Engineer",
+        jd_text="JD text",
+        local_user_id=5,
+        discovered_role_id=12,
+    )
+    result = TailorResumeResult(
+        current_step=WorkflowStep.BUILDING_STRATEGY,
+        resume_text="Resume text",
+        parsed_resume=Mock(),
+        analyzed_jd=Mock(company="Acme", job_title="Applied AI Engineer"),
+        evaluation=FitEvaluation(
+            score=8,
+            should_apply=True,
+            matching_areas=["Python"],
+            missing_areas=[],
+            recommendations=[],
+            confidence=0.8,
+        ),
+    )
+
+    next_result = service.execute_workflow_step(request, WorkflowStep.BUILDING_STRATEGY, result)
+
+    assert next_result.strategy_brief_id == 77
+    assert linked == {"user_id": 5, "role_id": 12, "strategy_brief_id": 77}
 
 
 @pytest.fixture
@@ -432,6 +495,153 @@ class TestMultiAgentWorkflowService:
                     )
 
                     assert result.evaluation is not None
+                    assert result.current_step == WorkflowStep.BUILDING_STRATEGY
+
+    def test_build_strategy_step_requires_strategy_approval(self, mock_llm_service, mock_google_services, sample_resume_text, sample_jd_text):
+        service = MultiAgentWorkflowService(
+            llm_service=mock_llm_service,
+            google_services=mock_google_services
+        )
+
+        request = TailorResumeRequest(
+            company="Test Corp",
+            job_title="Senior Engineer",
+            jd_text=sample_jd_text,
+        )
+        previous_result = TailorResumeResult(
+            current_step=WorkflowStep.BUILDING_STRATEGY,
+            original_resume_text=sample_resume_text,
+            resume_text=sample_resume_text,
+            parsed_resume=Mock(all_skills=["Python"], total_years_experience=7, job_titles=["Engineer"]),
+            analyzed_jd=Mock(required_skills=["Python"], preferred_skills=[], raw_text=sample_jd_text),
+            evaluation=FitEvaluation(
+                score=4,
+                should_apply=False,
+                matching_areas=["Python"],
+                missing_areas=["Kubernetes"],
+                recommendations=["Proceed only with explicit override"],
+                confidence=0.8,
+            ),
+        )
+
+        brief = JobStrategyBrief(
+            id=42,
+            company="Test Corp",
+            job_title="Senior Engineer",
+            fit_score=4,
+            should_apply=False,
+            confidence=0.8,
+            gating_decision="stop_and_ask",
+            role_summary="Weak fit; require explicit user approval.",
+            tailoring_directives=[
+                StrategyDirective(
+                    id="dir_1",
+                    section="summary",
+                    action="Emphasize truthful backend depth",
+                )
+            ],
+        )
+
+        with patch.object(service.strategy_brief_service, "build_brief", return_value=brief):
+            with patch.object(service.strategy_brief_service, "persist_brief", return_value=brief):
+                result = service.execute_workflow_step(
+                    request=request,
+                    current_step=WorkflowStep.BUILDING_STRATEGY,
+                    previous_result=previous_result,
+                )
+
+        assert result.current_step == WorkflowStep.PREVIEW
+        assert result.approval_required is True
+        assert result.approval_stage == "strategy"
+        assert result.strategy_brief.gating_decision == "stop_and_ask"
+
+    def test_build_strategy_step_reuses_existing_brief(self, mock_llm_service, mock_google_services, sample_resume_text, sample_jd_text):
+        service = MultiAgentWorkflowService(
+            llm_service=mock_llm_service,
+            google_services=mock_google_services
+        )
+        request = TailorResumeRequest(
+            company="Test Corp",
+            job_title="Senior Engineer",
+            jd_text=sample_jd_text,
+            local_user_id=123,
+        )
+        previous_result = TailorResumeResult(
+            current_step=WorkflowStep.BUILDING_STRATEGY,
+            original_resume_text=sample_resume_text,
+            resume_text=sample_resume_text,
+            parsed_resume=Mock(all_skills=["Python"], total_years_experience=7, job_titles=["Engineer"]),
+            analyzed_jd=Mock(company="Test Corp", job_title="Senior Engineer", required_skills=["Python"], preferred_skills=[], raw_text=sample_jd_text),
+            evaluation=FitEvaluation(
+                score=7,
+                should_apply=True,
+                matching_areas=["Python"],
+                missing_areas=[],
+                recommendations=[],
+                confidence=0.8,
+            ),
+        )
+        existing = JobStrategyBrief(
+            id=5,
+            company="Test Corp",
+            job_title="Senior Engineer",
+            fit_score=7,
+            should_apply=True,
+            confidence=0.8,
+            role_summary="Reuse the saved strategy.",
+            tailoring_directives=[StrategyDirective(id="dir_1", section="summary", action="Lead with backend depth")],
+        )
+
+        with patch.object(service.strategy_brief_service, "find_existing_brief", return_value=existing) as find_mock:
+            with patch.object(service.strategy_brief_service, "build_brief") as build_mock:
+                with patch.object(service.strategy_brief_service, "persist_brief", return_value=existing):
+                    result = service.execute_workflow_step(
+                        request=request,
+                        current_step=WorkflowStep.BUILDING_STRATEGY,
+                        previous_result=previous_result,
+                    )
+
+        find_mock.assert_called_once()
+        build_mock.assert_not_called()
+        assert result.strategy_brief.id == 5
+
+    def test_tracking_step_persists_strategy_brief_id(self, mock_llm_service, mock_google_services):
+        service = MultiAgentWorkflowService(
+            llm_service=mock_llm_service,
+            google_services=mock_google_services
+        )
+
+        request = TailorResumeRequest(
+            company="Test Corp",
+            job_title="Senior Engineer",
+            jd_text="JD",
+            track_application=True,
+        )
+        previous_result = TailorResumeResult(
+            current_step=WorkflowStep.TRACKING_APPLICATION,
+            evaluation=FitEvaluation(
+                score=7,
+                should_apply=True,
+                matching_areas=[],
+                missing_areas=[],
+                recommendations=[],
+                confidence=0.8,
+            ),
+            strategy_brief_id=99,
+            tailored_doc_id="doc_123",
+            analyzed_jd=Mock(job_title="Senior Engineer", company="Test Corp"),
+        )
+
+        with patch("resume_agent.services.multi_agent_workflow.add_or_update_application", return_value=123) as tracker_mock:
+            result = service.execute_workflow_step(
+                request=request,
+                current_step=WorkflowStep.TRACKING_APPLICATION,
+                previous_result=previous_result,
+            )
+
+        assert result.application_id == 123
+        tracker_mock.assert_called_once()
+        assert tracker_mock.call_args.kwargs["strategy_brief_id"] == 99
     
     def test_workflow_uses_progress_callback(self, mock_llm_service, mock_google_services, sample_resume_text):
         """Test that progress callbacks are invoked"""

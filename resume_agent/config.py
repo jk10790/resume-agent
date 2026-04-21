@@ -133,6 +133,21 @@ class Settings(BaseSettings):
     # Approval Workflow Configuration
     approval_timeout_seconds: int = Field(3600, validation_alias=AliasChoices('APPROVAL_TIMEOUT_SECONDS'))  # 1 hour default
     approval_storage_backend: str = Field("memory", validation_alias=AliasChoices('APPROVAL_STORAGE_BACKEND'))  # memory, redis, database
+
+    # Discover roles configuration
+    discover_enabled: bool = Field(False, validation_alias=AliasChoices('DISCOVER_ENABLED'))
+    discover_provider: str = Field("none", validation_alias=AliasChoices('DISCOVER_PROVIDER'))
+    discover_firecrawl_api_key: Optional[str] = Field(None, validation_alias=AliasChoices('DISCOVER_FIRECRAWL_API_KEY'))
+    discover_query_cache_hours: int = Field(6, validation_alias=AliasChoices('DISCOVER_QUERY_CACHE_HOURS'))
+    discover_posting_recent_ttl_hours: int = Field(12, validation_alias=AliasChoices('DISCOVER_POSTING_RECENT_TTL_HOURS'))
+    discover_posting_stale_ttl_hours: int = Field(72, validation_alias=AliasChoices('DISCOVER_POSTING_STALE_TTL_HOURS'))
+    discover_max_query_variants: int = Field(3, validation_alias=AliasChoices('DISCOVER_MAX_QUERY_VARIANTS'))
+    discover_max_results_per_variant: int = Field(15, validation_alias=AliasChoices('DISCOVER_MAX_RESULTS_PER_VARIANT'))
+    discover_max_fetches_per_search: int = Field(20, validation_alias=AliasChoices('DISCOVER_MAX_FETCHES_PER_SEARCH'))
+    discover_max_survivors: int = Field(12, validation_alias=AliasChoices('DISCOVER_MAX_SURVIVORS'))
+    discover_max_display_results: int = Field(20, validation_alias=AliasChoices('DISCOVER_MAX_DISPLAY_RESULTS'))
+    discover_min_extracted_text_chars: int = Field(350, validation_alias=AliasChoices('DISCOVER_MIN_EXTRACTED_TEXT_CHARS'))
+    discover_role_expansion_version: str = Field("v1", validation_alias=AliasChoices('DISCOVER_ROLE_EXPANSION_VERSION'))
     
     # API Configuration
     api_cors_origins: str = Field("http://localhost:3000,http://localhost:5173", validation_alias=AliasChoices('API_CORS_ORIGINS'))
@@ -275,6 +290,19 @@ except (PermissionError, OSError, FileNotFoundError) as e:
         humanizer_max_tokens: int = Field(3000, validation_alias=AliasChoices('HUMANIZER_MAX_TOKENS'))
         approval_timeout_seconds: int = Field(3600, validation_alias=AliasChoices('APPROVAL_TIMEOUT_SECONDS'))
         approval_storage_backend: str = Field("memory", validation_alias=AliasChoices('APPROVAL_STORAGE_BACKEND'))
+        discover_enabled: bool = Field(False, validation_alias=AliasChoices('DISCOVER_ENABLED'))
+        discover_provider: str = Field("none", validation_alias=AliasChoices('DISCOVER_PROVIDER'))
+        discover_firecrawl_api_key: Optional[str] = Field(None, validation_alias=AliasChoices('DISCOVER_FIRECRAWL_API_KEY'))
+        discover_query_cache_hours: int = Field(6, validation_alias=AliasChoices('DISCOVER_QUERY_CACHE_HOURS'))
+        discover_posting_recent_ttl_hours: int = Field(12, validation_alias=AliasChoices('DISCOVER_POSTING_RECENT_TTL_HOURS'))
+        discover_posting_stale_ttl_hours: int = Field(72, validation_alias=AliasChoices('DISCOVER_POSTING_STALE_TTL_HOURS'))
+        discover_max_query_variants: int = Field(3, validation_alias=AliasChoices('DISCOVER_MAX_QUERY_VARIANTS'))
+        discover_max_results_per_variant: int = Field(15, validation_alias=AliasChoices('DISCOVER_MAX_RESULTS_PER_VARIANT'))
+        discover_max_fetches_per_search: int = Field(20, validation_alias=AliasChoices('DISCOVER_MAX_FETCHES_PER_SEARCH'))
+        discover_max_survivors: int = Field(12, validation_alias=AliasChoices('DISCOVER_MAX_SURVIVORS'))
+        discover_max_display_results: int = Field(20, validation_alias=AliasChoices('DISCOVER_MAX_DISPLAY_RESULTS'))
+        discover_min_extracted_text_chars: int = Field(350, validation_alias=AliasChoices('DISCOVER_MIN_EXTRACTED_TEXT_CHARS'))
+        discover_role_expansion_version: str = Field("v1", validation_alias=AliasChoices('DISCOVER_ROLE_EXPANSION_VERSION'))
         api_cors_origins: str = Field("http://localhost:3000,http://localhost:5173", validation_alias=AliasChoices('API_CORS_ORIGINS'))
         api_max_request_size: int = Field(10485760, validation_alias=AliasChoices('API_MAX_REQUEST_SIZE'))
         google_oauth_client_id: Optional[str] = Field(None, validation_alias=AliasChoices('GOOGLE_OAUTH_CLIENT_ID'))

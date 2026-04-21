@@ -10,9 +10,11 @@ from __future__ import annotations
 from ..models.agent_models import UserProfileContext
 from ..storage.user_store import (
     get_user_by_id,
+    get_user_evidence_records,
     get_user_metric_records,
     get_user_skill_records,
     get_user_skills,
+    get_user_target_archetypes,
 )
 
 
@@ -30,6 +32,8 @@ class ProfileContextService:
             detected_skill_records=get_user_skill_records(int(user_id), state="detected"),
             suggested_skill_records=get_user_skill_records(int(user_id), state="suggested"),
             confirmed_metric_records=get_user_metric_records(int(user_id), state="confirmed"),
+            confirmed_evidence_records=get_user_evidence_records(int(user_id), state="confirmed"),
+            target_archetype_preferences=get_user_target_archetypes(int(user_id)),
             preferred_resume_doc_id=user.get("preferred_resume_doc_id"),
             preferred_resume_name=user.get("preferred_resume_name"),
         )

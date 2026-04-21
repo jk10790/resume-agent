@@ -1,0 +1,282 @@
+.discover-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.discover-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1.6rem 1.7rem;
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at top left, rgba(217, 119, 6, 0.14), transparent 30%),
+    linear-gradient(135deg, rgba(255, 251, 245, 0.98), rgba(243, 248, 246, 0.98));
+  border: 1px solid rgba(34, 61, 64, 0.08);
+  box-shadow: 0 18px 42px rgba(34, 41, 47, 0.05);
+}
+
+.discover-hero h2 {
+  margin: 0;
+  color: #17373d;
+  font-size: clamp(1.9rem, 3vw, 2.7rem);
+  letter-spacing: -0.035em;
+  font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+}
+
+.discover-hero p {
+  max-width: 64ch;
+  margin: 0.55rem 0 0;
+  color: #5b6a6f;
+  line-height: 1.6;
+}
+
+.discover-form-card,
+.discover-empty-card,
+.discover-meta-bar,
+.discover-filter-banner,
+.discover-role-card,
+.discover-suggestions-panel {
+  padding: 1.15rem;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(34, 61, 64, 0.08);
+}
+
+.discover-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.discover-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.discover-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.discover-field-wide {
+  grid-column: 1 / -1;
+}
+
+.discover-field span {
+  font-weight: 700;
+  color: #224347;
+}
+
+.discover-field input,
+.discover-field select,
+.discover-dismiss-form textarea,
+.discover-search-input {
+  padding: 0.82rem 0.9rem;
+  border-radius: 14px;
+  border: 1px solid rgba(34, 61, 64, 0.12);
+  background: rgba(255, 255, 255, 0.95);
+  font: inherit;
+}
+
+.discover-chip-row,
+.discover-card-actions,
+.discover-actions,
+.discover-pill-groups,
+.discover-filter-tabs,
+.discover-toolbar,
+.discover-role-meta,
+.discover-saved-search-create,
+.discover-analytics-grid,
+.discover-suggestions-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.discover-saved-search-create input {
+  flex: 1;
+  min-width: 180px;
+}
+
+.discover-chip,
+.discover-filter-tab,
+.discover-secondary-button,
+.discover-primary-button,
+.discover-link-button,
+.discover-pill {
+  border-radius: 999px;
+  border: 1px solid rgba(34, 61, 64, 0.12);
+  background: rgba(255, 255, 255, 0.96);
+  color: #35555b;
+  padding: 0.55rem 0.85rem;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.discover-chip.active,
+.discover-filter-tab.active,
+.discover-primary-button {
+  background: linear-gradient(135deg, #104c55 0%, #0f766e 100%);
+  color: white;
+  border-color: transparent;
+}
+
+.discover-inline-error {
+  margin-top: 0.9rem;
+  color: #a53931;
+  font-weight: 700;
+}
+
+.discover-meta-bar,
+.discover-filter-banner {
+  color: #4d666c;
+}
+
+.discover-toolbar {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.discover-search-input {
+  min-width: 240px;
+}
+
+.discover-results-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.discover-saved-search-list,
+.discover-analytics-list {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.8rem;
+}
+
+.discover-saved-search-card,
+.discover-suggestion-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 0.9rem;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(34, 61, 64, 0.08);
+}
+
+.discover-default-badge {
+  margin-left: 0.5rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.09);
+  color: #0f766e;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.discover-analytics-stat {
+  display: flex;
+  flex-direction: column;
+  min-width: 96px;
+  padding: 0.8rem;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(34, 61, 64, 0.08);
+}
+
+.discover-analytics-stat span {
+  color: #17373d;
+  font-size: 1.2rem;
+  font-weight: 800;
+}
+
+.discover-analytics-stat small,
+.discover-muted-copy,
+.discover-defaults-copy,
+.discover-suggestion-card small {
+  color: #65797f;
+}
+
+.discover-analytics-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  color: #486168;
+}
+
+.discover-role-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.discover-role-company {
+  color: #486168;
+  font-weight: 700;
+}
+
+.discover-role-title {
+  color: #17373d;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.discover-role-domain,
+.discover-role-meta {
+  color: #667b80;
+  font-size: 0.88rem;
+}
+
+.discover-role-summary {
+  margin: 0.85rem 0;
+  color: #425c63;
+  line-height: 1.55;
+}
+
+.discover-pill.match {
+  background: rgba(15, 118, 110, 0.09);
+}
+
+.discover-pill.blocker,
+.discover-confidence-badge {
+  background: rgba(217, 119, 6, 0.11);
+}
+
+.discover-dismiss-form {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(34, 61, 64, 0.08);
+}
+
+.discover-loading {
+  color: #5b6a6f;
+}
+
+@media (max-width: 840px) {
+  .discover-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .discover-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .discover-toolbar,
+  .discover-role-header,
+  .discover-saved-search-card,
+  .discover-suggestion-card {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .discover-search-input {
+    min-width: 0;
+  }
+}

@@ -1,0 +1,153 @@
+.strategy-briefs-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.4rem;
+}
+
+.strategy-briefs-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1.6rem 1.7rem;
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at top right, rgba(15, 118, 110, 0.14), transparent 28%),
+    linear-gradient(135deg, rgba(255, 251, 245, 0.98), rgba(243, 248, 246, 0.98));
+  border: 1px solid rgba(34, 61, 64, 0.08);
+  box-shadow: 0 18px 42px rgba(34, 41, 47, 0.05);
+}
+
+.strategy-briefs-hero h2 {
+  margin: 0;
+  color: #17373d;
+  font-size: clamp(1.9rem, 3vw, 2.7rem);
+  letter-spacing: -0.035em;
+  font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+}
+
+.strategy-briefs-hero p {
+  margin: 0.55rem 0 0;
+  max-width: 64ch;
+  color: #5b6a6f;
+  line-height: 1.6;
+}
+
+.strategy-briefs-filters {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 1rem;
+}
+
+.strategy-briefs-empty,
+.strategy-briefs-grid {
+  margin-top: 0.25rem;
+}
+
+.strategy-briefs-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 1.2rem;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(34, 61, 64, 0.08);
+  color: #57686e;
+}
+
+.context-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.95rem 1.05rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  color: #456067;
+}
+
+.context-banner strong {
+  color: #17373d;
+}
+
+.strategy-briefs-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.strategy-library-card {
+  padding: 1.2rem;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(247, 250, 249, 0.95));
+  border: 1px solid rgba(34, 61, 64, 0.08);
+  box-shadow: 0 18px 40px rgba(34, 41, 47, 0.05);
+}
+
+.strategy-library-card-topline {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.strategy-library-title {
+  color: #19393f;
+  font-size: 1.04rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.strategy-library-title span {
+  color: #8a9a9f;
+  margin: 0 0.2rem;
+}
+
+.strategy-library-meta,
+.strategy-library-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 0.45rem;
+  color: #587076;
+  font-size: 0.87rem;
+}
+
+.strategy-library-summary {
+  margin: 0.85rem 0 0;
+  color: #486168;
+  line-height: 1.55;
+}
+
+.strategy-library-evidence-preview {
+  margin-top: 0.7rem;
+  color: #355248;
+}
+
+.strategy-library-evidence-preview strong {
+  color: #17373d;
+}
+
+.strategy-library-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 1rem;
+}
+
+@media (max-width: 780px) {
+  .strategy-briefs-hero,
+  .strategy-library-card-topline {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .strategy-briefs-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .context-banner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
