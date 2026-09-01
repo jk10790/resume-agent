@@ -4,8 +4,28 @@ Scope: how the `Discover` module can carry a user from "found a role" to "tailor
 resume for it" — specifically (1) reading the full JD in-app, (2) evaluating fit on a
 chosen discovery result, and (3) moving that same result into tailoring.
 
-This is a design review of the code as it stands on `main`, plus a recommended
-implementation shape. No behaviour is changed by this document.
+This started as a design review of the code as it stands on `main`. **The recommended
+shape (option A) is now implemented on this branch** — see Implementation status below;
+the rest of the document is kept as the rationale for what was built.
+
+---
+
+## Implementation status
+
+All three PRs in §5 landed together, plus findings 1–3 and 5 from §6.
+
+| Area | Change |
+|---|---|
+| Storage | `fit_score`, `fit_should_apply`, `fit_evaluation_json`, `fit_evaluated_at` on `discovered_roles` (additive migration); `sort=fit` and `evaluated_only`; list payload no longer carries `raw_text` |
+| Service | `resume_agent/services/fit_evaluation_service.py` — the resume-resolution + evaluate path shared by both fit surfaces |
+| Service | `DiscoverRolesService.evaluate_role_fit()`; enriched `discover_seed`; `fit_evaluated_roles` funnel stage |
+| API | `POST /api/discover/roles/{id}/evaluate-fit`; `sort` / `evaluated_only` on `GET /roles`; `/api/evaluate-fit` now prefers supplied `jd_text` |
+| Frontend | `RoleDetailModal.jsx` — full JD, inline fit, action ladder; fit badge, sort control and “Evaluated only” filter in the inbox; Tailor banner shows the fit and skips a second evaluation |
+| Tests | `test_fit_evaluation_service.py` (new), plus additions to `test_discover_api.py`, `test_discover_roles_service.py`, `test_user_store.py`, `test_frontend_playwright.py` |
+
+Finding 4 (the `track_application` condition) is left as-is deliberately: changing it
+would alter tracking behaviour for every discovery-origin run, which is a product call
+rather than part of this integration.
 
 ---
 
@@ -193,16 +213,16 @@ Tests to add alongside:
 
 Independent of which option you pick.
 
-1. **`api/main.py:570` prefers `job_url` over `jd_text` in `/api/evaluate-fit`.** Any
+1. **Fixed — `/api/evaluate-fit` preferred `job_url` over `jd_text`.** Any
    caller that has good text *and* a URL gets a redundant scrape. Discovery is exactly
    that caller. Prefer `jd_text` when present, or pass URL only.
-2. **`resume_agent/agents/fit_evaluator.py:59` references an undefined `known_skills`.**
+2. **Fixed — `resume_agent/agents/fit_evaluator.py:59` referenced an undefined `known_skills`.**
    `_evaluate_fit_structured_fallback` does not take that parameter, so the fallback
    raises `NameError` — and because it runs inside the `except` handler of
    `evaluate_resume_fit`, it masks the original error. Reachable from `main.py:79`,
    `main.py:182` and `resume_workflow.py:189`. One-line fix: thread `known_skills`
    through.
-3. **The inbox list ships the entire JD for every role.**
+3. **Fixed — the inbox list shipped the entire JD for every role.**
    `list_discovered_roles_for_user` (`user_store.py:970-1023`) does `SELECT *`, and
    `_normalize_discovered_role_row` keeps `raw_text`. At the 100-role cap that is a
    multi-megabyte response for a list view that renders only `short_tldr`. Select explicit
@@ -216,6 +236,6 @@ Independent of which option you pick.
    the approval path. The condition looks vestigial; either drop it or comment why it is
    there, because it makes the discovery path behave differently from every other path
    for a non-obvious reason.
-5. **`open_in_tailor` conflates "opened" with "intent to tailor".** Once a viewer exists,
+5. **Handled by design — `open_in_tailor` conflates "opened" with "intent to tailor".** Once a viewer exists,
    consider whether `opened_in_tailor_at` should be stamped on the modal's Tailor button
    only (recommended, and what §3.1 assumes) so the funnel keeps measuring intent.
