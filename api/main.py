@@ -27,6 +27,12 @@ except (ImportError, NameError) as e:
     import sys
     print(f"Warning: Failed to import MultiAgentWorkflowService: {e}", file=sys.stderr)
     MultiAgentWorkflowService = ResumeWorkflowService
+from resume_agent.services.fit_evaluation_service import (
+    FitEvaluationError,
+    evaluate_fit_for_jd,
+    load_resume_text,
+    normalize_resume_doc_ids,
+)
 from resume_agent.services.llm_service import LLMService
 from resume_agent.storage.google_docs import read_google_doc, read_resume_file, write_to_google_doc
 from resume_agent.storage.google_drive_utils import list_google_docs, list_google_folders, get_file_metadata, GOOGLE_DOC_MIME
@@ -514,6 +520,16 @@ def _serialize_strategy_detail(user_id: int, brief_id: int) -> Dict[str, Any]:
     }
 
 
+FIT_ERROR_STATUS = {
+    "no_google_session": 401,
+    "no_resume_configured": 400,
+    "resume_forbidden": 403,
+    "no_jd_text": 400,
+    "resume_unreadable": 500,
+    "failed": 500,
+}
+
+
 @app.post("/api/evaluate-fit")
 async def evaluate_fit(request: EvaluateFitRequest, http_request: Request):
     """Evaluate job fit for the current page (e.g. from Chrome extension). Returns score and recommendations."""
@@ -522,87 +538,38 @@ async def evaluate_fit(request: EvaluateFitRequest, http_request: Request):
     try:
         llm_service = LLMService()
         google_services = get_google_services_from_request(http_request)
-        if not google_services:
-            raise HTTPException(
-                status_code=401,
-                detail=(
-                    "Google sign-in required. Open the Resume Agent web app in this browser, "
-                    "sign in with Google, then use the extension again (the extension uses the same session)."
-                ),
-            )
-        drive_service, docs_service = google_services
         from resume_agent.config import settings
-        from resume_agent.utils.exceptions import GoogleAPIError
-        candidate_doc_ids = []
-        for raw_value in (
+
+        doc_ids = normalize_resume_doc_ids([
             request.resume_doc_id,
             get_preferred_resume_doc_id(http_request),
             settings.resume_doc_id,
-        ):
-            normalized = extract_google_doc_id(raw_value)
-            if normalized and normalized not in candidate_doc_ids:
-                candidate_doc_ids.append(normalized)
-        if not candidate_doc_ids:
-            raise HTTPException(status_code=400, detail="No resume configured. Set RESUME_DOC_ID or pass resume_doc_id.")
-        last_google_error = None
-        resume_text = None
-        for doc_id in candidate_doc_ids:
-            try:
-                resume_text = read_resume_file(drive_service, docs_service, doc_id)
-                if resume_text:
-                    break
-            except GoogleAPIError as e:
-                last_google_error = e
-                continue
-        if not resume_text:
-            if last_google_error and ("not found" in str(last_google_error).lower() or "inaccessible" in str(last_google_error).lower()):
-                raise HTTPException(
-                    status_code=403,
-                    detail=(
-                        "That resume file wasn't found or you don't have access. "
-                        "If you're using the extension: open the web app, sign in with Google, "
-                        "pick your resume from the app's Drive picker, then try Evaluate fit again from the extension."
-                    ),
-                )
-            if last_google_error:
-                raise last_google_error
-            raise HTTPException(status_code=400, detail="No readable resume could be loaded for fit evaluation.")
-        if request.job_url:
+        ])
+        resume_text = load_resume_text(google_services, doc_ids)
+
+        # Prefer text the caller already has: re-extracting from the URL costs a
+        # fetch that job boards frequently block, and it can only lose detail
+        # against a description the caller scraped or stored itself.
+        jd_text = (request.jd_text or "").strip()
+        if not jd_text and request.job_url:
             from resume_agent.agents.jd_extractor import extract_clean_jd
             jd_text = extract_clean_jd(request.job_url, llm_service)
-        else:
-            jd_text = (request.jd_text or "").strip()
         if not jd_text:
             raise HTTPException(status_code=400, detail="Could not get job description from URL or jd_text.")
-        workflow = MultiAgentWorkflowService(llm_service=llm_service, google_services=google_services)
-        req = TailorResumeRequest(
-            company="",
-            job_title="",
+
+        evaluation = evaluate_fit_for_jd(
             jd_text=jd_text,
-            job_url=request.job_url,
-            evaluate_first=True,
-            evaluate_only=True,
+            resume_text=resume_text,
+            llm_service=llm_service,
+            google_services=google_services,
             local_user_id=(get_local_user_from_request(http_request).get("id") if get_session_data(http_request) else None),
+            job_url=request.job_url,
         )
-        result = TailorResumeResult(current_step=WorkflowStep.LOADING_RESUME, resume_text=resume_text, original_resume_text=resume_text)
-        result = workflow.execute_workflow_step(req, WorkflowStep.PARSING_RESUME, result)
-        if result.error:
-            raise HTTPException(status_code=500, detail=result.error)
-        result = workflow.execute_workflow_step(req, WorkflowStep.EVALUATING_FIT, result)
-        if result.error:
-            raise HTTPException(status_code=500, detail=result.error)
-        ev = result.evaluation
-        return {
-            "success": True,
-            "score": ev.score,
-            "should_apply": ev.should_apply,
-            "confidence": ev.confidence,
-            "matching_areas": getattr(ev, "matching_areas", []) or [],
-            "missing_areas": getattr(ev, "missing_areas", []) or [],
-            "recommendations": getattr(ev, "recommendations", []) or [],
-        }
+        return {"success": True, **evaluation}
     except HTTPException:
         raise
+    except FitEvaluationError as e:
+        raise HTTPException(status_code=FIT_ERROR_STATUS.get(e.code, 500), detail=str(e))
     except Exception as e:
         logger.error(f"Evaluate fit failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

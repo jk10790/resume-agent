@@ -344,12 +344,148 @@ class AnthropicProvider(LLMProvider):
         return self.model_name
 
 
+class TautProvider(LLMProvider):
+    """taut middleware as an in-process provider.
+
+    taut sits in front of the real provider and adds two things this app lacks:
+    a heuristic that routes each call to a model tier (the extraction agents are
+    mechanical and do not need the tailoring model), and per-call token/cost
+    accounting, which nothing here records today. Its own semantic cache is left
+    off because LLMService and AgentCache already cache on an exact hash.
+
+    Runs as a library, not the `taut serve` proxy — `Pipeline.run_sync` handles
+    the sync/async boundary, so no extra process to deploy.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        default_model: str,
+        tiers: Optional[Dict[str, List[str]]] = None,
+        routing_enabled: bool = True,
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+        timeout: float = 60.0,
+    ):
+        if not api_key:
+            raise LLMError(
+                "An upstream API key is required for the taut provider",
+                provider="taut",
+                fix_instructions=(
+                    "1. Add the upstream key to .env (e.g. ANTHROPIC_API_KEY=...)\n"
+                    "2. Set LLM_PROVIDER=taut\n"
+                    "3. Set TAUT_DEFAULT_MODEL to a litellm model id, e.g. "
+                    "anthropic/claude-sonnet-4-5-20250929"
+                ),
+            )
+        try:
+            from taut import PrefixAlignmentConfig, TautConfig, TieredRoutingConfig, create_pipeline
+        except ImportError:
+            raise LLMError(
+                "taut package not installed",
+                provider="taut",
+                fix_instructions="Install with: pip install taut",
+            )
+
+        self.default_model = default_model
+        self.model_name = default_model
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.routing_enabled = routing_enabled
+        self.tiers = tiers or {}
+        self.last_usage: Dict[str, Any] = {}
+
+        config = TautConfig(
+            api_key=api_key,
+            default_model=default_model,
+            timeout=timeout,
+            # Off: LLMService already caches responses on an exact hash, and the
+            # JSON crusher only fires on a whole-message JSON payload, which none
+            # of this app's prompts are.
+            cache=None,
+            compression=None,
+            # On: harmless for the current single-turn prompts, and it stamps
+            # Anthropic cache_control once a prompt leads with a stable system
+            # block of 1024+ tokens.
+            prefix=PrefixAlignmentConfig(),
+            routing=(
+                TieredRoutingConfig(tiers=tiers) if routing_enabled and tiers else None
+            ),
+            restraint=None,
+            guard=None,
+        )
+        self._pipeline = create_pipeline(config)
+        logger.info(
+            "Initialized taut provider",
+            default_model=default_model,
+            routing_enabled=bool(routing_enabled and tiers),
+            tiers=tiers or {},
+        )
+
+    def _to_taut_messages(self, messages: List[BaseMessage]):
+        """Map LangChain messages onto taut's role/content messages."""
+        from taut import Message
+
+        role_map = {"SystemMessage": "system", "AIMessage": "assistant"}
+        converted = []
+        for msg in messages:
+            content = str(getattr(msg, "content", "")).strip()
+            if not content:
+                continue
+            role = role_map.get(msg.__class__.__name__, "user")
+            converted.append(Message(role=role, content=content))
+        return converted
+
+    def invoke(self, messages: List[BaseMessage]) -> str:
+        from taut import LLMRequest
+
+        taut_messages = self._to_taut_messages(messages)
+        if not taut_messages:
+            raise LLMError("At least one non-empty message is required", provider="taut")
+
+        request = LLMRequest(
+            messages=taut_messages,
+            # Leaving model unset is what lets the routing layer classify the
+            # call; with routing off, taut falls back to default_model.
+            model=None if self.routing_enabled and self.tiers else self.default_model,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+        try:
+            response = self._pipeline.run_sync(request)
+        except Exception as e:
+            raise LLMError(f"taut pipeline failed: {e}", provider="taut")
+
+        usage = response.usage
+        self.last_usage = {
+            # Named apart from the configured model: routing may have picked a
+            # different tier for this call.
+            "routed_model": response.model,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "cached_tokens": usage.cached_tokens or 0,
+            "cost_usd": response.cost_usd,
+        }
+        logger.info(
+            "taut call complete",
+            model=response.model,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cached_tokens=usage.cached_tokens or 0,
+            cost_usd=response.cost_usd,
+        )
+        return (response.content or "").strip()
+
+    def get_model_name(self) -> str:
+        return self.model_name
+
+
 def create_provider(provider_type: str, **kwargs) -> LLMProvider:
     """
     Factory function to create LLM provider instances.
 
     Args:
-        provider_type: One of "ollama", "groq", "openai", or "anthropic"
+        provider_type: One of "ollama", "groq", "openai", "anthropic", or "taut"
         **kwargs: Provider-specific configuration
 
     Returns:
@@ -401,14 +537,25 @@ def create_provider(provider_type: str, **kwargs) -> LLMProvider:
             max_tokens=max_tokens,
         )
 
+    elif provider_type == "taut":
+        return TautProvider(
+            api_key=kwargs.get("api_key"),
+            default_model=kwargs.get("default_model", "anthropic/claude-sonnet-4-5-20250929"),
+            tiers=kwargs.get("tiers"),
+            routing_enabled=kwargs.get("routing_enabled", True),
+            temperature=kwargs.get("temperature", 0.3),
+            max_tokens=kwargs.get("max_tokens", 4096),
+            timeout=kwargs.get("timeout", 60.0),
+        )
+
     else:
         from ..utils.exceptions import ConfigError
         raise ConfigError(
             f"Unknown LLM provider: {provider_type}",
             config_key="LLM_PROVIDER",
             fix_instructions=(
-                f"1. Set LLM_PROVIDER to one of: ollama, groq, openai, anthropic\n"
+                f"1. Set LLM_PROVIDER to one of: ollama, groq, openai, anthropic, taut\n"
                 f"2. Current value: {provider_type}\n"
-                f"3. Update your .env file with: LLM_PROVIDER=anthropic (or groq/ollama/openai)"
+                f"3. Update your .env file with: LLM_PROVIDER=anthropic (or groq/ollama/openai/taut)"
             )
         )

@@ -323,19 +323,14 @@ class MultiAgentWorkflowService:
                     if progress_callback:
                         progress_callback(f"✅ Fit evaluation complete (Score: {fit_evaluation.score}/10)")
                 except Exception as e:
+                    # Surface the failure instead of substituting a score. A
+                    # stand-in 5/10 would be persisted and displayed as though
+                    # the model had judged the role.
                     logger.error(f"Fit evaluator failed: {e}", exc_info=True)
-                    # Continue with default evaluation
-                    from ..models.resume import FitEvaluation
-                    fit_evaluation = FitEvaluation(
-                        score=5,
-                        should_apply=False,
-                        confidence=0.5,
-                        matching_areas=[],
-                        missing_areas=["Evaluation failed"],
-                        recommendations=["Manual review recommended"]
-                    )
-                    result.evaluation = fit_evaluation
-                
+                    result.error = f"Fit evaluation failed: {e}"
+                    result.current_step = WorkflowStep.ERROR
+                    return result
+
                 # Check fit evaluation result - only proceed if fit is adequate
                 logger.info(
                     "Multi-Agent Workflow: Fit evaluation complete",
@@ -472,17 +467,9 @@ class MultiAgentWorkflowService:
                         result.evaluation = fit_evaluation
                     except Exception as e:
                         logger.error(f"Fit evaluator failed: {e}", exc_info=True)
-                        # Continue with default evaluation
-                        from ..models.resume import FitEvaluation
-                        fit_evaluation = FitEvaluation(
-                            score=5,
-                            should_apply=False,
-                            confidence=0.5,
-                            matching_areas=[],
-                            missing_areas=["Evaluation failed"],
-                            recommendations=["Manual review recommended"]
-                        )
-                        result.evaluation = fit_evaluation
+                        result.error = f"Fit evaluation failed: {e}"
+                        result.current_step = WorkflowStep.ERROR
+                        return result
                 
                 # Step 4: Tailor Resume (ATS scoring happens after tailoring)
                 if progress_callback:

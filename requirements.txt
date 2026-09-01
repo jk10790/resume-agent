@@ -44,3 +44,9 @@ pypdf>=4.0.0
 # selenium>=4.15.0
 # playwright>=1.40.0
 mcp>=1.0.0  # stdio MCP server for discovery (resume_agent/agent/mcp_discovery.py)
+
+# Optional: taut middleware (LLM_PROVIDER=taut) — tiered model routing and
+# per-call token/cost accounting, run in-process, no proxy. Not on PyPI yet;
+# install from the local checkout:
+#   pip install -e ../taut
+# taut>=0.1.0

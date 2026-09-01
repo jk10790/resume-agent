@@ -8,6 +8,7 @@ from typing import Dict, List, Any, Optional, TYPE_CHECKING
 from pydantic import ValidationError
 from ..services.llm_service import LLMService
 from ..utils.logger import logger
+from ..utils.exceptions import FitEvaluationUnavailable
 from ..models.resume import FitEvaluation
 from ..models.agent_models import FitAnalysis, FitAnalysisStructured
 import json
@@ -242,22 +243,10 @@ Evaluate the TRUE fit considering both literal and inferred matches."""
             return _analyze_and_validate()
         except Exception as e:
             logger.error(f"Fit analysis failed: {e}", exc_info=True)
-        
-        # Fallback analysis
-        return FitAnalysis(
-            fit_score=5,
-            should_apply=len(missing_required) == 0,
-            confidence=0.5,
-            matching_skills=matching_skills,
-            missing_required_skills=missing_required,
-            matching_preferred_skills=matching_preferred,
-            experience_match="unknown",
-            experience_gap_years=None,
-            education_match=False,
-            missing_education=[],
-            strengths=[],
-            weaknesses=missing_required,
-            recommendations=[],
-            matching_areas=matching_skills[:5],
-            missing_areas=missing_required[:5]
-        )
+            # No usable judgement came back, so there is no score to report. The
+            # local skill overlap alone cannot stand in for one: a 5/10 built
+            # from it is indistinguishable from a real 5/10 by the time it
+            # reaches the UI or a persisted discovered_roles row.
+            raise FitEvaluationUnavailable(
+                f"The model did not return a usable fit analysis: {e}"
+            ) from e

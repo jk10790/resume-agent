@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import RoleDetailModal from './RoleDetailModal'
 import './DiscoverRoles.css'
 
 const ARCHETYPE_OPTIONS = [
@@ -74,6 +75,13 @@ function metaItems(role) {
     .filter((value) => value && value.toLowerCase() !== 'unknown' && !value.toLowerCase().endsWith('unavailable'))
 }
 
+function fitTone(score) {
+  if (score === null || score === undefined) return 'unknown'
+  if (score >= 7) return 'high'
+  if (score >= 5) return 'medium'
+  return 'low'
+}
+
 function formFromCriteria(criteria = {}) {
   return {
     search_intent: criteria.search_intent || '',
@@ -146,12 +154,18 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
   const [inboxFilter, setInboxFilter] = useState('active')
   const [inboxSearch, setInboxSearch] = useState('')
   const [pendingRoleId, setPendingRoleId] = useState(null)
+  const [inboxSort, setInboxSort] = useState('default')
+  const [evaluatedOnly, setEvaluatedOnly] = useState(false)
+  const [detailRoleId, setDetailRoleId] = useState(null)
   const [dismissingRoleId, setDismissingRoleId] = useState(null)
   const [dismissReasons, setDismissReasons] = useState([])
   const [dismissComment, setDismissComment] = useState('')
   const [form, setForm] = useState(EMPTY_FORM)
 
-  const filterIsActive = useMemo(() => inboxFilter !== 'active' || inboxSearch.trim().length > 0, [inboxFilter, inboxSearch])
+  const filterIsActive = useMemo(
+    () => inboxFilter !== 'active' || inboxSearch.trim().length > 0 || evaluatedOnly || inboxSort !== 'default',
+    [inboxFilter, inboxSearch, evaluatedOnly, inboxSort]
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -214,7 +228,12 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
     }
   }, [isAuthenticated, status.configured])
 
-  const loadInbox = async (state = inboxFilter, search = inboxSearch) => {
+  const loadInbox = async (
+    state = inboxFilter,
+    search = inboxSearch,
+    sort = inboxSort,
+    onlyEvaluated = evaluatedOnly
+  ) => {
     setLoadingInbox(true)
     try {
       const params = new URLSearchParams({
@@ -222,6 +241,8 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
         limit: '100', // API caps at 100; the catalog now yields well over 50
       })
       if (search.trim()) params.set('search', search.trim())
+      if (sort !== 'default') params.set('sort', sort)
+      if (onlyEvaluated) params.set('evaluated_only', 'true')
       const response = await fetch(`/api/discover/roles?${params.toString()}`, { credentials: 'include' })
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}))
@@ -305,7 +326,7 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
   }
 
   const refreshInbox = async (state = inboxFilter, search = inboxSearch) => {
-    await loadInbox(state, search)
+    await loadInbox(state, search, inboxSort, evaluatedOnly)
   }
 
   const refreshDiscoveryMeta = async () => {
@@ -487,6 +508,7 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
   const handleOpenInTailor = (roleId) =>
     runRoleAction(roleId, async () => {
       const payload = await postRoleAction(roleId, 'open-in-tailor', {}, 'Failed to open role in Tailor')
+      setDetailRoleId(null)
       if (typeof onOpenInTailor === 'function') {
         onOpenInTailor(payload.discover_seed)
       }
@@ -495,7 +517,17 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
   const resetInboxFilters = async () => {
     setInboxFilter('active')
     setInboxSearch('')
-    await loadInbox('active', '')
+    setInboxSort('default')
+    setEvaluatedOnly(false)
+    await loadInbox('active', '', 'default', false)
+  }
+
+  const safely = (action) => async (...args) => {
+    try {
+      await action(...args)
+    } catch (err) {
+      setError(err.message)
+    }
   }
 
   if (!isAuthenticated) {
@@ -737,6 +769,34 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
                 </button>
               ))}
             </div>
+            <div className="discover-toolbar-controls">
+              <label className="discover-sort-control">
+                <span>Sort</span>
+                <select
+                  value={inboxSort}
+                  onChange={async (event) => {
+                    const value = event.target.value
+                    setInboxSort(value)
+                    await loadInbox(inboxFilter, inboxSearch, value, evaluatedOnly)
+                  }}
+                >
+                  <option value="default">Best match</option>
+                  <option value="fit">Fit score</option>
+                </select>
+              </label>
+              <label className="discover-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={evaluatedOnly}
+                  onChange={async (event) => {
+                    const checked = event.target.checked
+                    setEvaluatedOnly(checked)
+                    await loadInbox(inboxFilter, inboxSearch, inboxSort, checked)
+                  }}
+                />
+                Evaluated only
+              </label>
+            </div>
             <div className="discover-search-field">
               <span className="discover-search-icon" aria-hidden="true">
                 🔍
@@ -806,15 +866,30 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
                     <div className="discover-role-header">
                       <div className="discover-role-heading">
                         <div className="discover-role-company">{role.company || 'Unknown company'}</div>
-                        <h4 className="discover-role-title">{role.job_title}</h4>
+                        <button
+                          type="button"
+                          className="discover-role-title discover-role-title-button"
+                          onClick={() => setDetailRoleId(role.id)}
+                        >
+                          {role.job_title}
+                        </button>
                       </div>
-                      {isShortlisted && <span className="discover-state-badge shortlisted">Shortlisted</span>}
-                      {isDismissed && <span className="discover-state-badge dismissed">Dismissed</span>}
+                      <div className="discover-role-header-right">
+                        {role.fit_score !== null && role.fit_score !== undefined && (
+                          <span className={`discover-fit-badge tone-${fitTone(role.fit_score)}`}>
+                            Fit {role.fit_score}/10
+                          </span>
+                        )}
+                        {isShortlisted && <span className="discover-state-badge shortlisted">Shortlisted</span>}
+                        {isDismissed && <span className="discover-state-badge dismissed">Dismissed</span>}
+                      </div>
                     </div>
 
                     <div className="discover-role-meta">
-                      {metaItems(role).map((item) => (
-                        <span key={`${role.id}-meta-${item}`} className="discover-meta-item">
+                      {/* Index-keyed: a role can legitimately repeat a value here
+                          (location "Remote" alongside remote_mode "Remote"). */}
+                      {metaItems(role).map((item, index) => (
+                        <span key={`${role.id}-meta-${index}-${item}`} className="discover-meta-item">
                           {item}
                         </span>
                       ))}
@@ -841,6 +916,14 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
                         <button
                           type="button"
                           className="discover-primary-button discover-button-sm"
+                          disabled={isPending}
+                          onClick={() => setDetailRoleId(role.id)}
+                        >
+                          View job
+                        </button>
+                        <button
+                          type="button"
+                          className="discover-secondary-button discover-button-sm"
                           disabled={isPending}
                           onClick={() => handleOpenInTailor(role.id)}
                         >
@@ -1116,6 +1199,22 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
           </section>
         </aside>
       </div>
+
+      {detailRoleId !== null && (
+        <RoleDetailModal
+          roleId={detailRoleId}
+          archetypeLabel={archetypeLabel}
+          onClose={() => setDetailRoleId(null)}
+          onShortlist={handleShortlist}
+          onDismiss={handleDismiss}
+          onRestore={handleRestore}
+          onOpenInTailor={handleOpenInTailor}
+          onRoleChanged={async () => {
+            await refreshInbox()
+            await refreshDiscoveryMeta()
+          }}
+        />
+      )}
     </div>
   )
 }

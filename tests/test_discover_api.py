@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from api.main import app
 from resume_agent.services.resume_workflow import TailorResumeResult, WorkflowStep
 from resume_agent.services.discover_roles_service import DiscoverConfigError
+from resume_agent.services.fit_evaluation_service import FitEvaluationError
 
 
 def _mock_local_user(_request):
@@ -140,3 +141,88 @@ def test_tailor_resume_request_disables_application_tracking_for_discovery(monke
 
     assert response.status_code == 200
     assert captured == {"track_application": False, "discovered_role_id": 99}
+
+
+def test_discover_evaluate_fit_endpoint(monkeypatch):
+    client = TestClient(app)
+    monkeypatch.setattr("api.routers.discover.get_local_user", _mock_local_user)
+    monkeypatch.setattr("api.routers.discover.get_google_services_from_request", lambda _request: ("drive", "docs"))
+    evaluate = Mock(
+        return_value={
+            "role": {"id": 12, "fit_score": 8, "fit_should_apply": True},
+            "evaluation": {"score": 8, "should_apply": True, "confidence": "high"},
+        }
+    )
+    monkeypatch.setattr("api.routers.discover._service", lambda: Mock(evaluate_role_fit=evaluate))
+
+    response = client.post("/api/discover/roles/12/evaluate-fit", json={"resume_doc_id": "doc-1"})
+
+    assert response.status_code == 200
+    assert response.json()["evaluation"]["score"] == 8
+    assert response.json()["role"]["fit_score"] == 8
+    assert evaluate.call_args.kwargs["resume_doc_id"] == "doc-1"
+
+
+def test_discover_evaluate_fit_endpoint_returns_404_for_unknown_role(monkeypatch):
+    client = TestClient(app)
+    monkeypatch.setattr("api.routers.discover.get_local_user", _mock_local_user)
+    monkeypatch.setattr("api.routers.discover.get_google_services_from_request", lambda _request: None)
+    monkeypatch.setattr(
+        "api.routers.discover._service",
+        lambda: Mock(evaluate_role_fit=Mock(side_effect=KeyError("Role not found"))),
+    )
+
+    response = client.post("/api/discover/roles/999/evaluate-fit", json={})
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "code,expected_status",
+    [
+        ("no_google_session", 401),
+        ("no_resume_configured", 400),
+        ("resume_forbidden", 403),
+        ("no_jd_text", 400),
+        ("failed", 500),
+    ],
+)
+def test_discover_evaluate_fit_endpoint_maps_error_codes(monkeypatch, code, expected_status):
+    client = TestClient(app, raise_server_exceptions=False)
+    monkeypatch.setattr("api.routers.discover.get_local_user", _mock_local_user)
+    monkeypatch.setattr("api.routers.discover.get_google_services_from_request", lambda _request: None)
+    monkeypatch.setattr(
+        "api.routers.discover._service",
+        lambda: Mock(evaluate_role_fit=Mock(side_effect=FitEvaluationError("nope", code=code))),
+    )
+
+    response = client.post("/api/discover/roles/12/evaluate-fit", json={})
+
+    assert response.status_code == expected_status
+
+
+def test_discover_roles_endpoint_passes_sort_and_filter(monkeypatch):
+    client = TestClient(app)
+    monkeypatch.setattr("api.routers.discover.get_local_user", _mock_local_user)
+    list_roles = Mock(return_value=[{"id": 1, "company": "Acme", "fit_score": 8}])
+    monkeypatch.setattr("api.routers.discover._service", lambda: Mock(list_roles=list_roles))
+
+    response = client.get("/api/discover/roles?sort=fit&evaluated_only=true")
+
+    assert response.status_code == 200
+    assert response.json()["roles"][0]["fit_score"] == 8
+    assert list_roles.call_args.kwargs["sort"] == "fit"
+    assert list_roles.call_args.kwargs["evaluated_only"] is True
+
+
+def test_discover_roles_endpoint_rejects_unknown_sort(monkeypatch):
+    client = TestClient(app)
+    monkeypatch.setattr("api.routers.discover.get_local_user", _mock_local_user)
+    monkeypatch.setattr(
+        "api.routers.discover._service",
+        lambda: Mock(list_roles=Mock(side_effect=ValueError("Unsupported sort"))),
+    )
+
+    response = client.get("/api/discover/roles?sort=nonsense")
+
+    assert response.status_code == 400
