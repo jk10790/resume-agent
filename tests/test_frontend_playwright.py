@@ -716,3 +716,61 @@ class TestFullWorkflowE2E:
         # 4. Wait for real API responses
         # 5. Verify results
         pass
+
+
+class TestDiscoverRoleDetail:
+    """Test the Discover role detail modal and its handoff into Tailor.
+
+    Requires Discovery to be enabled and configured on the running backend, and a
+    signed-in user with at least one role in the inbox. Skips otherwise.
+    """
+
+    def _open_discover(self, page, frontend_url):
+        page.goto(frontend_url)
+        time.sleep(2)
+        discover_tab = page.locator("nav.tabs button", has_text="Discover")
+        if discover_tab.count() == 0:
+            pytest.skip("Discover tab not available: discovery is disabled or unconfigured on the backend.")
+        discover_tab.first.click()
+        time.sleep(2)
+        cards = page.locator(".discover-role-card")
+        if cards.count() == 0:
+            pytest.skip("Discover inbox is empty: sign in and run a search before this test.")
+        return cards
+
+    def test_view_job_opens_modal_with_full_jd(self, page, frontend_url):
+        """The View job action shows the stored posting body without leaving the app."""
+        cards = self._open_discover(page, frontend_url)
+        cards.first.locator("button", has_text="View job").click()
+
+        modal = page.locator(".discover-modal")
+        expect(modal).to_be_visible(timeout=10000)
+        expect(modal.locator(".discover-jd-text")).to_be_visible()
+        assert len(modal.locator(".discover-jd-text").inner_text().strip()) > 0
+
+    def test_modal_offers_fit_evaluation_and_tailor_handoff(self, page, frontend_url):
+        """The modal exposes the read -> evaluate -> tailor ladder."""
+        cards = self._open_discover(page, frontend_url)
+        cards.first.locator("button", has_text="View job").click()
+
+        modal = page.locator(".discover-modal")
+        expect(modal).to_be_visible(timeout=10000)
+        expect(modal.locator(".discover-fit-panel")).to_be_visible()
+        expect(modal.locator("button", has_text="Tailor resume")).to_be_visible()
+
+    def test_tailor_handoff_switches_tabs_and_seeds_the_form(self, page, frontend_url):
+        """Tailoring from the modal lands in Tailor with the discovery banner and JD text."""
+        cards = self._open_discover(page, frontend_url)
+        cards.first.locator("button", has_text="View job").click()
+
+        modal = page.locator(".discover-modal")
+        expect(modal).to_be_visible(timeout=10000)
+        tailor_button = modal.locator("button", has_text="Tailor resume")
+        if tailor_button.count() == 0:
+            pytest.skip("First inbox role is dismissed, so the Tailor action is intentionally unavailable.")
+        tailor_button.first.click()
+        time.sleep(2)
+
+        expect(page.locator(".tailor-discovery-banner")).to_be_visible(timeout=10000)
+        jd_textarea = page.locator('textarea[placeholder*="job description"], textarea[placeholder*="Job Description"]')
+        assert len(jd_textarea.first.input_value().strip()) > 0

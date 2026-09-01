@@ -368,6 +368,8 @@ function TailorResume({
     setJdText(discoverSeed.jd_text || '')
     setInputMethod('text')
     setDiscoveryContext(discoverSeed)
+    // Fit already scored in Discover — don't pay for the same evaluation twice.
+    if (discoverSeed.fit_evaluation) setEvaluateFirst(false)
     setError(null)
     setResult(null)
     if (typeof onConsumedDiscoverSeed === 'function') {
@@ -2297,11 +2299,21 @@ function TailorResume({
           <div>
             <strong>Discovery result loaded</strong>
             <p>This role came from Discover. Review it, then click Tailor Resume to start the strategy-first workflow.</p>
+            {discoveryContext.fit_evaluation && (
+              <p className="tailor-discovery-fit">
+                Fit {discoveryContext.fit_evaluation.score}/10 — evaluated in Discover
+                {discoveryContext.fit_evaluation.should_apply === false && ', flagged as a weak match'}
+                . The fit check is switched off below so this run does not repeat it.
+              </p>
+            )}
           </div>
           <div className="tailor-discovery-meta">
             <span>{discoveryContext.company || 'Unknown company'}</span>
             <span>{discoveryContext.job_title || 'Untitled role'}</span>
             <span>{discoveryContext.posted_label || 'Date unavailable'}</span>
+            {discoveryContext.location && <span>{discoveryContext.location}</span>}
+            {discoveryContext.remote_mode && <span>{discoveryContext.remote_mode}</span>}
+            {discoveryContext.compensation && <span>{discoveryContext.compensation}</span>}
           </div>
         </div>
       )}

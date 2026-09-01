@@ -280,3 +280,364 @@
     min-width: 0;
   }
 }
+
+/* ---------- role header additions ---------- */
+
+.discover-role-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.discover-role-title-button {
+  display: block;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: #17373d;
+  font-size: 1.05rem;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+
+.discover-role-title-button:hover {
+  color: #0f766e;
+  text-decoration: underline;
+}
+
+.discover-fit-badge {
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.discover-fit-badge.tone-high {
+  background: rgba(15, 118, 110, 0.12);
+  color: #0f5f59;
+  border-color: rgba(15, 118, 110, 0.3);
+}
+
+.discover-fit-badge.tone-medium {
+  background: rgba(217, 119, 6, 0.13);
+  color: #8a5206;
+  border-color: rgba(217, 119, 6, 0.3);
+}
+
+.discover-fit-badge.tone-low {
+  background: rgba(165, 57, 49, 0.11);
+  color: #8f3229;
+  border-color: rgba(165, 57, 49, 0.28);
+}
+
+.discover-toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+}
+
+.discover-sort-control {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: #4d666c;
+  font-size: 0.9rem;
+}
+
+.discover-sort-control select {
+  font: inherit;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid rgba(34, 61, 64, 0.16);
+  background: white;
+  color: #17373d;
+}
+
+/* ---------- role detail modal ---------- */
+
+.discover-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(11, 32, 35, 0.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 3vh 1rem;
+  z-index: 1000;
+  overflow-y: auto;
+}
+
+.discover-modal {
+  background: #fbfcfb;
+  border-radius: 14px;
+  border: 1px solid rgba(34, 61, 64, 0.12);
+  box-shadow: 0 24px 60px rgba(11, 32, 35, 0.28);
+  width: min(58rem, 100%);
+  max-height: 94vh;
+  overflow-y: auto;
+  padding: 1.5rem 1.6rem 1.75rem;
+}
+
+.discover-modal-loading {
+  padding: 2rem 0;
+  color: #5b6a6f;
+  text-align: center;
+}
+
+.discover-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.discover-modal-company {
+  color: #486168;
+  font-weight: 700;
+}
+
+.discover-modal-title {
+  margin: 0.2rem 0 0;
+  color: #17373d;
+  font-size: 1.4rem;
+  line-height: 1.25;
+}
+
+.discover-modal-close {
+  border: none;
+  background: none;
+  font-size: 1.7rem;
+  line-height: 1;
+  color: #667b80;
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+
+.discover-modal-close:hover {
+  color: #17373d;
+}
+
+.discover-modal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin: 0.85rem 0;
+  color: #667b80;
+  font-size: 0.88rem;
+}
+
+.discover-modal-state {
+  color: #8f3229;
+  font-weight: 700;
+}
+
+/* ---------- fit panel ---------- */
+
+.discover-fit-panel {
+  margin: 1.1rem 0;
+  padding: 1.1rem 1.2rem;
+  border-radius: 12px;
+  border: 1px solid rgba(34, 61, 64, 0.12);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.discover-fit-panel.tone-high { border-left: 4px solid #0f766e; }
+.discover-fit-panel.tone-medium { border-left: 4px solid #d97706; }
+.discover-fit-panel.tone-low { border-left: 4px solid #a53931; }
+
+.discover-fit-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.discover-fit-empty p {
+  margin: 0.3rem 0 0;
+  color: #5b6a6f;
+  font-size: 0.92rem;
+}
+
+.discover-fit-header {
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  flex-wrap: wrap;
+}
+
+.discover-fit-score {
+  display: flex;
+  align-items: baseline;
+  color: #17373d;
+}
+
+.discover-fit-number {
+  font-size: 2.1rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.discover-fit-denominator {
+  font-size: 0.95rem;
+  color: #667b80;
+}
+
+.discover-fit-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  color: #5b6a6f;
+  font-size: 0.86rem;
+  margin-right: auto;
+}
+
+.discover-fit-verdict strong {
+  color: #17373d;
+  font-size: 0.98rem;
+}
+
+.discover-fit-columns {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  margin-top: 1rem;
+}
+
+.discover-fit-columns h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #667b80;
+}
+
+.discover-fit-columns ul {
+  margin: 0;
+  padding-left: 1.05rem;
+  color: #425c63;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+/* ---------- JD body ---------- */
+
+.discover-jd-block {
+  margin-top: 1.2rem;
+}
+
+.discover-jd-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.discover-jd-header h4 {
+  margin: 0;
+  color: #17373d;
+  font-size: 1rem;
+}
+
+.discover-jd-header a {
+  color: #0f766e;
+  font-size: 0.88rem;
+}
+
+.discover-jd-warning {
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  background: rgba(217, 119, 6, 0.11);
+  color: #8a5206;
+  font-size: 0.88rem;
+}
+
+.discover-jd-text {
+  margin: 0.7rem 0 0;
+  max-height: 26rem;
+  overflow: auto;
+  padding: 1rem 1.1rem;
+  border-radius: 10px;
+  border: 1px solid rgba(34, 61, 64, 0.1);
+  background: rgba(240, 245, 244, 0.75);
+  color: #2f4a50;
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---------- feedback log + actions ---------- */
+
+.discover-feedback-log {
+  margin-top: 1.3rem;
+}
+
+.discover-feedback-log h4 {
+  margin: 0 0 0.4rem;
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #667b80;
+}
+
+.discover-feedback-log ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.discover-feedback-log li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.87rem;
+  color: #5b6a6f;
+}
+
+.discover-feedback-decision {
+  font-weight: 700;
+  color: #35555b;
+  text-transform: capitalize;
+}
+
+.discover-feedback-date {
+  margin-left: auto;
+  color: #8a9a9e;
+}
+
+.discover-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 1.5rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid rgba(34, 61, 64, 0.08);
+}
+
+.discover-modal-hint {
+  color: #667b80;
+  font-size: 0.88rem;
+}
+
+@media (max-width: 840px) {
+  .discover-modal {
+    padding: 1.1rem 1rem 1.4rem;
+  }
+
+  .discover-toolbar-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
