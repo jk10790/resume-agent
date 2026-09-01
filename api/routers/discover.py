@@ -6,16 +6,31 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from .auth import get_local_user
+from .google_drive import get_google_services_from_request
 from resume_agent.config import settings
 from resume_agent.services.discover_roles_service import (
     DiscoverConfigError,
     DiscoverRolesService,
     DiscoverSearchCriteria,
 )
+from resume_agent.services.fit_evaluation_service import FitEvaluationError
 from resume_agent.services.llm_service import LLMService
+from resume_agent.storage.user_store import get_user_by_id
+from resume_agent.utils.google_ids import extract_google_doc_id
 
 
 router = APIRouter(prefix="/api/discover", tags=["discover"])
+
+# Same mapping the /api/evaluate-fit endpoint uses, so both fit surfaces answer
+# an unreadable resume or a signed-out session identically.
+FIT_ERROR_STATUS = {
+    "no_google_session": 401,
+    "no_resume_configured": 400,
+    "resume_forbidden": 403,
+    "no_jd_text": 400,
+    "resume_unreadable": 500,
+    "failed": 500,
+}
 
 
 class DiscoverSearchRequest(BaseModel):
@@ -34,6 +49,10 @@ class DiscoverSearchRequest(BaseModel):
 
 class DiscoverShortlistRequest(BaseModel):
     comment: Optional[str] = None
+
+
+class DiscoverEvaluateFitRequest(BaseModel):
+    resume_doc_id: Optional[str] = None
 
 
 class DiscoverDismissRequest(BaseModel):
@@ -159,10 +178,21 @@ async def list_discovered_roles(
     inbox_state: str = Query("active"),
     search: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=100),
+    sort: str = Query("default"),
+    evaluated_only: bool = Query(False),
 ):
     local_user = get_local_user(request)
     try:
-        return {"roles": _service().list_roles(local_user["id"], inbox_state=inbox_state, search=search, limit=limit)}
+        return {
+            "roles": _service().list_roles(
+                local_user["id"],
+                inbox_state=inbox_state,
+                search=search,
+                limit=limit,
+                sort=sort,
+                evaluated_only=evaluated_only,
+            )
+        }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -201,6 +231,32 @@ async def restore_discovered_role(role_id: int, request: Request):
     if not role:
         raise HTTPException(status_code=404, detail="Discovered role not found")
     return role
+
+
+def _preferred_resume_doc_id(local_user: dict) -> Optional[str]:
+    try:
+        fresh_user = get_user_by_id(int(local_user["id"])) or local_user
+    except (TypeError, ValueError):
+        fresh_user = local_user
+    return extract_google_doc_id(fresh_user.get("preferred_resume_doc_id"))
+
+
+@router.post("/roles/{role_id}/evaluate-fit")
+async def evaluate_discovered_role_fit(role_id: int, payload: DiscoverEvaluateFitRequest, request: Request):
+    """Score a discovered role against the user's resume without leaving the inbox."""
+    local_user = get_local_user(request)
+    try:
+        return _service().evaluate_role_fit(
+            local_user["id"],
+            role_id,
+            google_services=get_google_services_from_request(request),
+            resume_doc_id=payload.resume_doc_id,
+            preferred_resume_doc_id=_preferred_resume_doc_id(local_user),
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Discovered role not found")
+    except FitEvaluationError as exc:
+        raise HTTPException(status_code=FIT_ERROR_STATUS.get(exc.code, 500), detail=str(exc))
 
 
 @router.post("/roles/{role_id}/open-in-tailor")

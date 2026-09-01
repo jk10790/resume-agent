@@ -226,6 +226,10 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             matched_filters_json TEXT NOT NULL DEFAULT '[]',
             possible_blockers_json TEXT NOT NULL DEFAULT '[]',
             compensation TEXT,
+            fit_score REAL,
+            fit_should_apply INTEGER,
+            fit_evaluation_json TEXT,
+            fit_evaluated_at TEXT,
             rank_score REAL NOT NULL DEFAULT 0.0,
             inbox_state TEXT NOT NULL DEFAULT 'discovered',
             opened_in_tailor_at TEXT,
@@ -247,6 +251,14 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
     }
     if "compensation" not in discovered_role_columns:
         conn.execute("ALTER TABLE discovered_roles ADD COLUMN compensation TEXT")
+    if "fit_score" not in discovered_role_columns:
+        conn.execute("ALTER TABLE discovered_roles ADD COLUMN fit_score REAL")
+    if "fit_should_apply" not in discovered_role_columns:
+        conn.execute("ALTER TABLE discovered_roles ADD COLUMN fit_should_apply INTEGER")
+    if "fit_evaluation_json" not in discovered_role_columns:
+        conn.execute("ALTER TABLE discovered_roles ADD COLUMN fit_evaluation_json TEXT")
+    if "fit_evaluated_at" not in discovered_role_columns:
+        conn.execute("ALTER TABLE discovered_roles ADD COLUMN fit_evaluated_at TEXT")
 
     conn.execute(
         """
@@ -814,6 +826,21 @@ def clear_improved_resume_for_user(user_id: int, doc_id: Optional[str] = None) -
 
 
 DISCOVERED_ROLE_INBOX_STATES = {"discovered", "shortlisted", "dismissed"}
+DISCOVERED_ROLE_SORTS = {"default", "fit"}
+
+
+# Columns the inbox list view needs. raw_text is deliberately excluded: it holds the
+# whole posting body, and shipping it for every row makes a list response that renders
+# only short_tldr many megabytes wide. The detail endpoint serves the body instead.
+DISCOVERED_ROLE_LIST_COLUMNS = (
+    "id, user_id, canonical_url, source_urls_json, source_domain, company, job_title, "
+    "matched_title_variant, location, remote_mode, employment_type, apply_url, posted_at, "
+    "posted_label, date_confidence, archetype, extraction_confidence, raw_text_hash, "
+    "short_tldr, matched_filters_json, possible_blockers_json, compensation, fit_score, "
+    "fit_should_apply, fit_evaluated_at, rank_score, inbox_state, opened_in_tailor_at, "
+    "opened_strategy_brief_id, first_seen_at, last_seen_at, last_scraped_at, last_ranked_at, "
+    "created_at, updated_at"
+)
 
 
 def _normalize_discovered_role_row(row: sqlite3.Row) -> Dict[str, Any]:
@@ -821,6 +848,10 @@ def _normalize_discovered_role_row(row: sqlite3.Row) -> Dict[str, Any]:
     payload["source_urls"] = _json_loads(payload.pop("source_urls_json", "[]"), [])
     payload["matched_filters"] = _json_loads(payload.pop("matched_filters_json", "[]"), [])
     payload["possible_blockers"] = _json_loads(payload.pop("possible_blockers_json", "[]"), [])
+    if "fit_evaluation_json" in payload:
+        payload["fit_evaluation"] = _json_loads(payload.pop("fit_evaluation_json") or "null", None)
+    if payload.get("fit_should_apply") is not None:
+        payload["fit_should_apply"] = bool(payload["fit_should_apply"])
     return payload
 
 
@@ -972,9 +1003,14 @@ def list_discovered_roles_for_user(
     inbox_state: str = "active",
     search: Optional[str] = None,
     limit: int = 50,
+    sort: str = "default",
+    evaluated_only: bool = False,
 ) -> List[Dict[str, Any]]:
     limit = max(1, min(int(limit or 50), 100))
     normalized_state = (inbox_state or "active").strip().lower()
+    normalized_sort = (sort or "default").strip().lower()
+    if normalized_sort not in DISCOVERED_ROLE_SORTS:
+        raise ValueError("Unsupported sort")
     clauses = ["user_id = ?"]
     params: List[Any] = [user_id]
 
@@ -1008,11 +1044,19 @@ def list_discovered_roles_for_user(
         )
         params.extend([token, token, token, token])
 
+    if evaluated_only:
+        clauses.append("fit_score IS NOT NULL")
+
+    if normalized_sort == "fit":
+        # Unevaluated roles keep their relative order but sink below scored ones,
+        # so "sort by fit" never buries a role the user simply has not checked yet.
+        order_by = f"CASE WHEN fit_score IS NULL THEN 1 ELSE 0 END, fit_score DESC, {order_by}"
+
     conn = get_db_connection()
     try:
         rows = conn.execute(
             f"""
-            SELECT *
+            SELECT {DISCOVERED_ROLE_LIST_COLUMNS}
             FROM discovered_roles
             WHERE {' AND '.join(clauses)}
             ORDER BY {order_by}
@@ -1085,6 +1129,44 @@ def update_discovered_role_inbox_state_for_user(user_id: int, role_id: int, inbo
             WHERE user_id = ? AND id = ?
             """,
             (normalized_state, now, user_id, role_id),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM discovered_roles WHERE user_id = ? AND id = ?", (user_id, role_id)).fetchone()
+        return _normalize_discovered_role_row(row) if row else {}
+    finally:
+        conn.close()
+
+
+def save_discovered_role_fit_for_user(
+    user_id: int,
+    role_id: int,
+    evaluation: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Persist a fit evaluation on a discovered role so the inbox can show and sort by it."""
+    now = _utcnow()
+    score = evaluation.get("score")
+    should_apply = evaluation.get("should_apply")
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            UPDATE discovered_roles
+            SET fit_score = ?,
+                fit_should_apply = ?,
+                fit_evaluation_json = ?,
+                fit_evaluated_at = ?,
+                updated_at = ?
+            WHERE user_id = ? AND id = ?
+            """,
+            (
+                float(score) if score is not None else None,
+                int(bool(should_apply)) if should_apply is not None else None,
+                _json_dumps(evaluation),
+                now,
+                now,
+                user_id,
+                role_id,
+            ),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM discovered_roles WHERE user_id = ? AND id = ?", (user_id, role_id)).fetchone()

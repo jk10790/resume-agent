@@ -30,6 +30,7 @@ from ..storage.user_store import (
     mark_discovery_saved_search_used_for_user,
     record_discovered_role_feedback_for_user,
     record_discovery_suggestion_event_for_user,
+    save_discovered_role_fit_for_user,
     save_or_merge_discovered_role_for_user,
     save_discovery_saved_search_for_user,
     save_discovery_user_preferences_for_user,
@@ -833,8 +834,23 @@ Do not invent company facts. Do not add blockers not grounded in the page text."
                 break
         return structured
 
-    def list_roles(self, user_id: int, inbox_state: str = "active", search: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
-        return list_discovered_roles_for_user(user_id, inbox_state=inbox_state, search=search, limit=limit)
+    def list_roles(
+        self,
+        user_id: int,
+        inbox_state: str = "active",
+        search: str | None = None,
+        limit: int = 50,
+        sort: str = "default",
+        evaluated_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        return list_discovered_roles_for_user(
+            user_id,
+            inbox_state=inbox_state,
+            search=search,
+            limit=limit,
+            sort=sort,
+            evaluated_only=evaluated_only,
+        )
 
     def get_role_detail(self, user_id: int, role_id: int) -> Optional[dict[str, Any]]:
         role = get_discovered_role_for_user(user_id, role_id)
@@ -852,6 +868,7 @@ Do not invent company facts. Do not add blockers not grounded in the page text."
                     COUNT(*) AS total_roles,
                     SUM(CASE WHEN inbox_state = 'shortlisted' THEN 1 ELSE 0 END) AS shortlisted_roles,
                     SUM(CASE WHEN inbox_state = 'dismissed' THEN 1 ELSE 0 END) AS dismissed_roles,
+                    SUM(CASE WHEN fit_score IS NOT NULL THEN 1 ELSE 0 END) AS fit_evaluated_roles,
                     SUM(CASE WHEN opened_in_tailor_at IS NOT NULL THEN 1 ELSE 0 END) AS opened_in_tailor_roles,
                     SUM(CASE WHEN opened_strategy_brief_id IS NOT NULL THEN 1 ELSE 0 END) AS strategy_linked_roles
                 FROM discovered_roles
@@ -876,23 +893,33 @@ Do not invent company facts. Do not add blockers not grounded in the page text."
                 for reason in json.loads(row["reasons_json"] or "[]"):
                     reason_counts[reason] = reason_counts.get(reason, 0) + int(row["count"] or 0)
 
-            feedback_total = sum(decision_counts.values())
+            # 'fit_evaluated' records that a role was scored, not that the user
+            # expressed a preference, so it stays out of the total that gates
+            # suggestions — otherwise checking fit alone would unlock them.
+            feedback_total = sum(
+                count for decision, count in decision_counts.items() if decision != "fit_evaluated"
+            )
             restored_count = decision_counts.get("restored", 0)
             dismissal_count = decision_counts.get("not_relevant", 0)
             restore_rate = round((restored_count / dismissal_count) * 100, 1) if dismissal_count else 0.0
 
-            applications_count = conn.execute(
-                """
-                SELECT COUNT(*)
-                FROM applications
-                WHERE strategy_brief_id IN (
-                    SELECT opened_strategy_brief_id
-                    FROM discovered_roles
-                    WHERE user_id = ? AND opened_strategy_brief_id IS NOT NULL
-                )
-                """,
-                (user_id,),
-            ).fetchone()[0]
+            try:
+                applications_count = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM applications
+                    WHERE strategy_brief_id IN (
+                        SELECT opened_strategy_brief_id
+                        FROM discovered_roles
+                        WHERE user_id = ? AND opened_strategy_brief_id IS NOT NULL
+                    )
+                    """,
+                    (user_id,),
+                ).fetchone()[0]
+            except sqlite3.OperationalError:
+                # The application tracker creates its table lazily, so a user who has
+                # discovered roles but never tracked an application has no table yet.
+                applications_count = 0
 
             recent_cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
             repeated_reason_rows = conn.execute(
@@ -922,6 +949,7 @@ Do not invent company facts. Do not add blockers not grounded in the page text."
                     "discovered_roles": int(role_counts["total_roles"] or 0),
                     "shortlisted_roles": int(role_counts["shortlisted_roles"] or 0),
                     "dismissed_roles": int(role_counts["dismissed_roles"] or 0),
+                    "fit_evaluated_roles": int(role_counts["fit_evaluated_roles"] or 0),
                     "opened_in_tailor_roles": int(role_counts["opened_in_tailor_roles"] or 0),
                     "strategy_linked_roles": int(role_counts["strategy_linked_roles"] or 0),
                     "application_linked_roles": int(applications_count or 0),
@@ -1009,6 +1037,68 @@ Do not invent company facts. Do not add blockers not grounded in the page text."
         record_discovered_role_feedback_for_user(user_id, role_id, "restored", [], None)
         return role
 
+    def evaluate_role_fit(
+        self,
+        user_id: int,
+        role_id: int,
+        *,
+        google_services=None,
+        resume_doc_id: str | None = None,
+        preferred_resume_doc_id: str | None = None,
+        llm_service=None,
+    ) -> dict[str, Any]:
+        """Score a discovered role against the user's resume and persist the result.
+
+        Uses the posting text discovery already stored: the apply URL is usually an
+        ATS page that blocks a second direct fetch, and re-extracting it could only
+        lose detail against text the provider already hydrated.
+        """
+        from .fit_evaluation_service import (
+            FitEvaluationError,
+            evaluate_fit_for_jd,
+            load_resume_text,
+            normalize_resume_doc_ids,
+        )
+
+        role = get_discovered_role_for_user(user_id, role_id)
+        if not role:
+            raise KeyError("Role not found")
+
+        jd_text = (role.get("raw_text") or "").strip()
+        if not jd_text:
+            raise FitEvaluationError(
+                "This role has no stored job description text to evaluate. Open the posting instead.",
+                code="no_jd_text",
+            )
+
+        doc_ids = normalize_resume_doc_ids([resume_doc_id, preferred_resume_doc_id, settings.resume_doc_id])
+        resume_text = load_resume_text(google_services, doc_ids)
+
+        evaluation = evaluate_fit_for_jd(
+            jd_text=jd_text,
+            resume_text=resume_text,
+            llm_service=llm_service or self.llm_service,
+            google_services=google_services,
+            local_user_id=user_id,
+            job_url=role.get("apply_url") or role.get("canonical_url"),
+            company=role.get("company") or "",
+            job_title=role.get("job_title") or "",
+        )
+
+        updated = save_discovered_role_fit_for_user(user_id, role_id, evaluation)
+        record_discovered_role_feedback_for_user(user_id, role_id, "fit_evaluated", [], None)
+        return {"role": updated, "evaluation": evaluation}
+
+    def _fit_summary(self, role: dict[str, Any]) -> Optional[dict[str, Any]]:
+        if role.get("fit_score") is None:
+            return None
+        return {
+            **(role.get("fit_evaluation") or {}),
+            "score": role.get("fit_score"),
+            "should_apply": role.get("fit_should_apply"),
+            "evaluated_at": role.get("fit_evaluated_at"),
+        }
+
     def open_in_tailor(self, user_id: int, role_id: int) -> dict[str, Any]:
         role = get_discovered_role_for_user(user_id, role_id)
         if not role:
@@ -1027,6 +1117,11 @@ Do not invent company facts. Do not add blockers not grounded in the page text."
                 "posted_label": updated.get("posted_label") or "Date unavailable",
                 "source_domain": updated.get("source_domain") or urlparse(updated.get("canonical_url") or "").netloc.lower(),
                 "apply_url": updated.get("apply_url"),
+                "location": updated.get("location") or "",
+                "remote_mode": updated.get("remote_mode") or "unknown",
+                "compensation": updated.get("compensation"),
+                "extraction_confidence": updated.get("extraction_confidence"),
+                "fit_evaluation": self._fit_summary(updated),
             }
         }
 

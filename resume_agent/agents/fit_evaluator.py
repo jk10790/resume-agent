@@ -43,7 +43,9 @@ def evaluate_resume_fit(
         return evaluation
     except Exception as e:
         logger.warning("Agent-based fit evaluation failed, using LLM fallback", error=str(e))
-        return _evaluate_fit_structured_fallback(llm_service, resume_text, jd_text, prompt_version)
+        return _evaluate_fit_structured_fallback(
+            llm_service, resume_text, jd_text, prompt_version, known_skills
+        )
 
 
 def _evaluate_fit_structured_fallback(
@@ -51,6 +53,7 @@ def _evaluate_fit_structured_fallback(
     resume_text: str,
     jd_text: str,
     prompt_version: str,
+    known_skills: list[str] | None = None,
 ) -> FitEvaluation:
     """Fallback using LLMService structured evaluation."""
     return llm_service.evaluate_fit_structured(

@@ -1,3 +1,5 @@
+import pytest
+
 from resume_agent.storage import user_store
 from resume_agent.storage import user_memory
 from resume_agent.storage.user_context import reset_current_user, set_current_user
@@ -384,3 +386,116 @@ def test_discovery_saved_searches_and_preferences_roundtrip():
     assert listed[0]["name"] == "Remote AI"
     assert loaded["criteria"]["search_intent"] == "applied ai"
     assert prefs["defaults"]["avoid_keywords"] == ["frontend"]
+
+
+def _seed_discovered_role(user_id: int, url: str, *, title: str = "Applied AI Engineer", rank: float = 80.0):
+    return user_store.save_or_merge_discovered_role_for_user(
+        user_id,
+        {
+            "canonical_url": url,
+            "source_urls": [url],
+            "source_domain": "jobs.example.com",
+            "company": "Acme",
+            "job_title": title,
+            "remote_mode": "remote",
+            "employment_type": "full_time",
+            "posted_label": "2 days ago",
+            "archetype": "applied_ai_llmops",
+            "extraction_confidence": 0.9,
+            "raw_text": "A" * 500,
+            "short_tldr": "Build AI systems.",
+            "matched_filters": ["remote"],
+            "possible_blockers": [],
+            "rank_score": rank,
+        },
+    )
+
+
+def test_discovered_role_list_omits_raw_text_but_detail_keeps_it():
+    user = user_store.upsert_google_user(
+        google_sub="test-google-sub-discover-list-payload",
+        email="discover-list@example.com",
+        name="Discover User",
+        picture_url=None,
+    )
+    saved = _seed_discovered_role(user["id"], "https://jobs.example.com/role/payload")
+
+    listed = user_store.list_discovered_roles_for_user(user["id"], inbox_state="active")
+    detail = user_store.get_discovered_role_for_user(user["id"], saved["id"])
+
+    assert len(listed) == 1
+    assert "raw_text" not in listed[0]
+    assert listed[0]["short_tldr"] == "Build AI systems."
+    assert detail["raw_text"] == "A" * 500
+
+
+def test_discovered_role_fit_is_persisted_and_sortable():
+    user = user_store.upsert_google_user(
+        google_sub="test-google-sub-discover-fit",
+        email="discover-fit@example.com",
+        name="Discover User",
+        picture_url=None,
+    )
+    strong = _seed_discovered_role(user["id"], "https://jobs.example.com/role/strong", title="Strong", rank=10.0)
+    weak = _seed_discovered_role(user["id"], "https://jobs.example.com/role/weak", title="Weak", rank=99.0)
+    _seed_discovered_role(user["id"], "https://jobs.example.com/role/unscored", title="Unscored", rank=95.0)
+
+    user_store.save_discovered_role_fit_for_user(
+        user["id"],
+        strong["id"],
+        {"score": 9, "should_apply": True, "matching_areas": ["python"], "missing_areas": []},
+    )
+    user_store.save_discovered_role_fit_for_user(
+        user["id"],
+        weak["id"],
+        {"score": 3, "should_apply": False, "matching_areas": [], "missing_areas": ["kubernetes"]},
+    )
+
+    detail = user_store.get_discovered_role_for_user(user["id"], strong["id"])
+    assert detail["fit_score"] == 9
+    assert detail["fit_should_apply"] is True
+    assert detail["fit_evaluation"]["matching_areas"] == ["python"]
+    assert detail["fit_evaluated_at"]
+
+    by_fit = user_store.list_discovered_roles_for_user(user["id"], inbox_state="active", sort="fit")
+    # Scored roles lead, best first; unscored sinks below them despite its higher rank score.
+    assert [row["job_title"] for row in by_fit] == ["Strong", "Weak", "Unscored"]
+    assert by_fit[0]["fit_should_apply"] is True
+
+    evaluated = user_store.list_discovered_roles_for_user(
+        user["id"], inbox_state="active", sort="fit", evaluated_only=True
+    )
+    assert [row["job_title"] for row in evaluated] == ["Strong", "Weak"]
+
+
+def test_discovered_role_list_rejects_unknown_sort():
+    user = user_store.upsert_google_user(
+        google_sub="test-google-sub-discover-sort",
+        email="discover-sort@example.com",
+        name="Discover User",
+        picture_url=None,
+    )
+
+    with pytest.raises(ValueError):
+        user_store.list_discovered_roles_for_user(user["id"], sort="nonsense")
+
+
+def test_fit_columns_are_added_to_an_existing_discovered_roles_table():
+    conn = user_store.get_db_connection()
+    try:
+        for column in ("fit_score", "fit_should_apply", "fit_evaluation_json", "fit_evaluated_at"):
+            conn.execute(f"ALTER TABLE discovered_roles DROP COLUMN {column}")
+        conn.commit()
+        remaining = {row["name"] for row in conn.execute("PRAGMA table_info(discovered_roles)").fetchall()}
+        assert "fit_score" not in remaining
+    finally:
+        conn.close()
+
+    # get_db_connection() re-runs the schema init, which should migrate the older table.
+    conn = user_store.get_db_connection()
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(discovered_roles)").fetchall()}
+    finally:
+        conn.close()
+
+    assert {"fit_score", "fit_should_apply", "fit_evaluation_json", "fit_evaluated_at"} <= columns
