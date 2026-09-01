@@ -63,7 +63,24 @@ class Settings(BaseSettings):
     anthropic_model: str = Field("claude-sonnet-4-20250514", validation_alias=AliasChoices('ANTHROPIC_MODEL'))
     anthropic_temperature: float = Field(0.3, validation_alias=AliasChoices('ANTHROPIC_TEMPERATURE'))
     anthropic_max_tokens: int = Field(4096, validation_alias=AliasChoices('ANTHROPIC_MAX_TOKENS'))
-    
+
+    # taut middleware settings (LLM_PROVIDER=taut). Models are litellm ids, so
+    # they carry a provider prefix: anthropic/claude-..., openai/gpt-...
+    taut_default_model: str = Field(
+        "anthropic/claude-sonnet-4-5-20250929", validation_alias=AliasChoices('TAUT_DEFAULT_MODEL')
+    )
+    taut_routing_enabled: bool = Field(True, validation_alias=AliasChoices('TAUT_ROUTING_ENABLED'))
+    taut_tier_simple: str = Field(
+        "anthropic/claude-haiku-4-5-20251001", validation_alias=AliasChoices('TAUT_TIER_SIMPLE')
+    )
+    taut_tier_standard: str = Field(
+        "anthropic/claude-sonnet-4-5-20250929", validation_alias=AliasChoices('TAUT_TIER_STANDARD')
+    )
+    taut_tier_complex: str = Field(
+        "anthropic/claude-sonnet-4-5-20250929", validation_alias=AliasChoices('TAUT_TIER_COMPLEX')
+    )
+    taut_timeout: float = Field(60.0, validation_alias=AliasChoices('TAUT_TIMEOUT'))
+
     application_db_path: Optional[str] = Field(None, validation_alias=AliasChoices('APPLICATION_DB_PATH'))
     memory_file: Optional[str] = Field(None, validation_alias=AliasChoices('MEMORY_FILE'))
     log_file: Optional[str] = Field(None, validation_alias=AliasChoices('LOG_FILE'))
@@ -254,6 +271,12 @@ except (PermissionError, OSError, FileNotFoundError) as e:
         anthropic_model: str = Field("claude-sonnet-4-20250514", validation_alias=AliasChoices('ANTHROPIC_MODEL'))
         anthropic_temperature: float = Field(0.3, validation_alias=AliasChoices('ANTHROPIC_TEMPERATURE'))
         anthropic_max_tokens: int = Field(4096, validation_alias=AliasChoices('ANTHROPIC_MAX_TOKENS'))
+        taut_default_model: str = Field("anthropic/claude-sonnet-4-5-20250929", validation_alias=AliasChoices('TAUT_DEFAULT_MODEL'))
+        taut_routing_enabled: bool = Field(True, validation_alias=AliasChoices('TAUT_ROUTING_ENABLED'))
+        taut_tier_simple: str = Field("anthropic/claude-haiku-4-5-20251001", validation_alias=AliasChoices('TAUT_TIER_SIMPLE'))
+        taut_tier_standard: str = Field("anthropic/claude-sonnet-4-5-20250929", validation_alias=AliasChoices('TAUT_TIER_STANDARD'))
+        taut_tier_complex: str = Field("anthropic/claude-sonnet-4-5-20250929", validation_alias=AliasChoices('TAUT_TIER_COMPLEX'))
+        taut_timeout: float = Field(60.0, validation_alias=AliasChoices('TAUT_TIMEOUT'))
         application_db_path: Optional[str] = Field(None, validation_alias=AliasChoices('APPLICATION_DB_PATH'))
         memory_file: Optional[str] = Field(None, validation_alias=AliasChoices('MEMORY_FILE'))
         log_file: Optional[str] = Field(None, validation_alias=AliasChoices('LOG_FILE'))
