@@ -138,13 +138,19 @@ class Settings(BaseSettings):
     discover_enabled: bool = Field(False, validation_alias=AliasChoices('DISCOVER_ENABLED'))
     discover_provider: str = Field("none", validation_alias=AliasChoices('DISCOVER_PROVIDER'))
     discover_firecrawl_api_key: Optional[str] = Field(None, validation_alias=AliasChoices('DISCOVER_FIRECRAWL_API_KEY'))
+    discover_source_config_path: str = Field("config/discovery_sources.yml", validation_alias=AliasChoices('DISCOVER_SOURCE_CONFIG_PATH'))
+    discover_ats_feed_ttl_minutes: int = Field(30, validation_alias=AliasChoices('DISCOVER_ATS_FEED_TTL_MINUTES'))
+    discover_max_hydration_fetches: int = Field(150, validation_alias=AliasChoices('DISCOVER_MAX_HYDRATION_FETCHES'))
+    discover_max_provider_postings: int = Field(2000, validation_alias=AliasChoices('DISCOVER_MAX_PROVIDER_POSTINGS'))
+    discover_llm_enrichment_provider: str = Field("none", validation_alias=AliasChoices('DISCOVER_LLM_ENRICHMENT_PROVIDER'))
+    discover_llm_enrichment_model: Optional[str] = Field(None, validation_alias=AliasChoices('DISCOVER_LLM_ENRICHMENT_MODEL'))
     discover_query_cache_hours: int = Field(6, validation_alias=AliasChoices('DISCOVER_QUERY_CACHE_HOURS'))
     discover_posting_recent_ttl_hours: int = Field(12, validation_alias=AliasChoices('DISCOVER_POSTING_RECENT_TTL_HOURS'))
     discover_posting_stale_ttl_hours: int = Field(72, validation_alias=AliasChoices('DISCOVER_POSTING_STALE_TTL_HOURS'))
     discover_max_query_variants: int = Field(3, validation_alias=AliasChoices('DISCOVER_MAX_QUERY_VARIANTS'))
     discover_max_results_per_variant: int = Field(15, validation_alias=AliasChoices('DISCOVER_MAX_RESULTS_PER_VARIANT'))
     discover_max_fetches_per_search: int = Field(20, validation_alias=AliasChoices('DISCOVER_MAX_FETCHES_PER_SEARCH'))
-    discover_max_survivors: int = Field(12, validation_alias=AliasChoices('DISCOVER_MAX_SURVIVORS'))
+    discover_max_survivors: int = Field(200, validation_alias=AliasChoices('DISCOVER_MAX_SURVIVORS'))
     discover_max_display_results: int = Field(20, validation_alias=AliasChoices('DISCOVER_MAX_DISPLAY_RESULTS'))
     discover_min_extracted_text_chars: int = Field(350, validation_alias=AliasChoices('DISCOVER_MIN_EXTRACTED_TEXT_CHARS'))
     discover_role_expansion_version: str = Field("v1", validation_alias=AliasChoices('DISCOVER_ROLE_EXPANSION_VERSION'))
@@ -206,6 +212,11 @@ class Settings(BaseSettings):
         if self.log_file:
             return resolve_path(self.log_file, self.log_file)
         return None
+
+    @property
+    def resolved_discover_source_config_path(self) -> str:
+        """Get resolved discovery source catalog path"""
+        return resolve_path(self.discover_source_config_path, "config/discovery_sources.yml")
 
 
 # Global settings instance
@@ -293,13 +304,19 @@ except (PermissionError, OSError, FileNotFoundError) as e:
         discover_enabled: bool = Field(False, validation_alias=AliasChoices('DISCOVER_ENABLED'))
         discover_provider: str = Field("none", validation_alias=AliasChoices('DISCOVER_PROVIDER'))
         discover_firecrawl_api_key: Optional[str] = Field(None, validation_alias=AliasChoices('DISCOVER_FIRECRAWL_API_KEY'))
+        discover_source_config_path: str = Field("config/discovery_sources.yml", validation_alias=AliasChoices('DISCOVER_SOURCE_CONFIG_PATH'))
+        discover_ats_feed_ttl_minutes: int = Field(30, validation_alias=AliasChoices('DISCOVER_ATS_FEED_TTL_MINUTES'))
+        discover_max_hydration_fetches: int = Field(150, validation_alias=AliasChoices('DISCOVER_MAX_HYDRATION_FETCHES'))
+        discover_max_provider_postings: int = Field(2000, validation_alias=AliasChoices('DISCOVER_MAX_PROVIDER_POSTINGS'))
+        discover_llm_enrichment_provider: str = Field("none", validation_alias=AliasChoices('DISCOVER_LLM_ENRICHMENT_PROVIDER'))
+        discover_llm_enrichment_model: Optional[str] = Field(None, validation_alias=AliasChoices('DISCOVER_LLM_ENRICHMENT_MODEL'))
         discover_query_cache_hours: int = Field(6, validation_alias=AliasChoices('DISCOVER_QUERY_CACHE_HOURS'))
         discover_posting_recent_ttl_hours: int = Field(12, validation_alias=AliasChoices('DISCOVER_POSTING_RECENT_TTL_HOURS'))
         discover_posting_stale_ttl_hours: int = Field(72, validation_alias=AliasChoices('DISCOVER_POSTING_STALE_TTL_HOURS'))
         discover_max_query_variants: int = Field(3, validation_alias=AliasChoices('DISCOVER_MAX_QUERY_VARIANTS'))
         discover_max_results_per_variant: int = Field(15, validation_alias=AliasChoices('DISCOVER_MAX_RESULTS_PER_VARIANT'))
         discover_max_fetches_per_search: int = Field(20, validation_alias=AliasChoices('DISCOVER_MAX_FETCHES_PER_SEARCH'))
-        discover_max_survivors: int = Field(12, validation_alias=AliasChoices('DISCOVER_MAX_SURVIVORS'))
+        discover_max_survivors: int = Field(200, validation_alias=AliasChoices('DISCOVER_MAX_SURVIVORS'))
         discover_max_display_results: int = Field(20, validation_alias=AliasChoices('DISCOVER_MAX_DISPLAY_RESULTS'))
         discover_min_extracted_text_chars: int = Field(350, validation_alias=AliasChoices('DISCOVER_MIN_EXTRACTED_TEXT_CHARS'))
         discover_role_expansion_version: str = Field("v1", validation_alias=AliasChoices('DISCOVER_ROLE_EXPANSION_VERSION'))
@@ -335,6 +352,11 @@ except (PermissionError, OSError, FileNotFoundError) as e:
             if self.log_file:
                 return resolve_path(self.log_file, self.log_file)
             return None
+
+        @property
+        def resolved_discover_source_config_path(self) -> str:
+            """Get resolved discovery source catalog path"""
+            return resolve_path(self.discover_source_config_path, "config/discovery_sources.yml")
     
     settings = SettingsNoEnvFile()
 

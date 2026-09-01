@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from html import unescape
 from typing import Any, Dict, Iterable, Optional
 from urllib.parse import urlparse
 import sqlite3
@@ -35,6 +36,7 @@ from ..storage.user_store import (
     update_discovered_role_inbox_state_for_user,
 )
 from ..utils.logger import logger
+from .discovery.ats_provider import ATSAPIProvider
 from .discovery.firecrawl_provider import FirecrawlSearchProvider
 from .discovery.posting_extractor import (
     ExtractedPosting,
@@ -42,61 +44,15 @@ from .discovery.posting_extractor import (
     normalize_url,
     relative_posted_label,
 )
-
-
-ROLE_FAMILY_EXPANSIONS: dict[str, list[str]] = {
-    "software_engineering": [
-        "software engineer",
-        "software developer",
-        "backend engineer",
-        "backend developer",
-        "application engineer",
-        "product engineer",
-        "full stack engineer",
-    ],
-    "platform_infrastructure": [
-        "platform engineer",
-        "infrastructure engineer",
-        "site reliability engineer",
-        "sre",
-        "devops engineer",
-        "production engineer",
-    ],
-    "data_ml_ai": [
-        "data engineer",
-        "machine learning engineer",
-        "ml engineer",
-        "data platform engineer",
-        "ai engineer",
-    ],
-    "applied_ai_llmops": [
-        "applied ai engineer",
-        "llm engineer",
-        "llmops engineer",
-        "agent engineer",
-        "ai systems engineer",
-        "ai platform engineer",
-    ],
-    "product_technical_product": [
-        "product manager",
-        "technical product manager",
-        "platform product manager",
-        "ai product manager",
-    ],
-    "solutions_customer_engineering": [
-        "solutions engineer",
-        "customer engineer",
-        "sales engineer",
-        "forward deployed engineer",
-        "implementation engineer",
-    ],
-}
+from .discovery.role_families import ROLE_FAMILY_EXPANSIONS
+from .discovery.source_catalog import SourceCatalogError, load_source_catalog
 
 DISCOVERY_PROMPT_VERSION = "v1"
 EXTRACTOR_VERSION = "v1"
 DISCOVER_STATUS_REASONS = {
     "disabled": "Discover is disabled on this instance.",
     "provider_missing": "Discover search is not configured on this instance.",
+    "catalog_invalid": "Discover ATS catalog is not configured correctly on this instance.",
 }
 
 
@@ -114,6 +70,7 @@ class DiscoverSearchCriteria:
     exclude_locations: list[str] | None = None
     must_have_keywords: list[str] | None = None
     avoid_keywords: list[str] | None = None
+    prefer_visa_sponsorship: bool = False
     page_size: int = 20
     refresh: bool = False
 
@@ -133,6 +90,7 @@ class DiscoverSearchCriteria:
             "exclude_locations": norm_list(self.exclude_locations),
             "must_have_keywords": norm_list(self.must_have_keywords),
             "avoid_keywords": norm_list(self.avoid_keywords),
+            "prefer_visa_sponsorship": bool(self.prefer_visa_sponsorship),
             "page_size": max(1, min(int(self.page_size or settings.discover_max_display_results), settings.discover_max_display_results)),
             "refresh": bool(self.refresh),
         }
@@ -142,6 +100,7 @@ class DiscoverRolesService:
     def __init__(self, llm_service=None, provider=None):
         self.llm_service = llm_service
         self.cache = get_cache_store()
+        self.provider_error: str | None = None
         self.provider = provider or self._build_provider()
 
     def _build_provider(self):
@@ -149,6 +108,14 @@ class DiscoverRolesService:
             return None
         if settings.discover_provider == "firecrawl" and settings.discover_firecrawl_api_key:
             return FirecrawlSearchProvider()
+        if settings.discover_provider == "ats_api":
+            try:
+                catalog = load_source_catalog()
+                return ATSAPIProvider(catalog=catalog, cache=self.cache)
+            except SourceCatalogError as exc:
+                self.provider_error = str(exc)
+                logger.warning("Discovery ATS catalog unavailable", error=str(exc))
+                return None
         return None
 
     def get_status(self) -> dict[str, Any]:
@@ -158,7 +125,7 @@ class DiscoverRolesService:
         if not settings.discover_enabled:
             reason = DISCOVER_STATUS_REASONS["disabled"]
         elif not configured:
-            reason = DISCOVER_STATUS_REASONS["provider_missing"]
+            reason = self.provider_error or DISCOVER_STATUS_REASONS["provider_missing"]
         return {
             "enabled": enabled,
             "provider": getattr(self.provider, "name", settings.discover_provider or "none"),
@@ -179,6 +146,7 @@ class DiscoverRolesService:
             exclude_locations=defaults.get("exclude_locations") or [],
             must_have_keywords=defaults.get("must_have_keywords") or [],
             avoid_keywords=defaults.get("avoid_keywords") or [],
+            prefer_visa_sponsorship=bool(defaults.get("prefer_visa_sponsorship")),
             page_size=defaults.get("page_size", settings.discover_max_display_results),
             refresh=False,
         ).normalized()
@@ -198,6 +166,7 @@ class DiscoverRolesService:
             exclude_locations=criteria.get("exclude_locations") or [],
             must_have_keywords=criteria.get("must_have_keywords") or [],
             avoid_keywords=criteria.get("avoid_keywords") or [],
+            prefer_visa_sponsorship=bool(criteria.get("prefer_visa_sponsorship")),
             page_size=criteria.get("page_size", settings.discover_max_display_results),
             refresh=False,
         ).normalized()
@@ -228,12 +197,16 @@ class DiscoverRolesService:
             raise DiscoverConfigError(DISCOVER_STATUS_REASONS["provider_missing"])
 
     def _query_cache_key(self, user_id: int, normalized: dict[str, Any]) -> str:
+        catalog_hash = None
+        if getattr(self.provider, "name", None) == "ats_api":
+            catalog_hash = getattr(self.provider, "catalog_hash", None)
         payload = json.dumps(
             {
                 "user_id": user_id,
                 "criteria": normalized,
                 "role_expansion_version": settings.discover_role_expansion_version,
                 "provider": self.provider.name if self.provider else "none",
+                "catalog_hash": catalog_hash,
             },
             sort_keys=True,
         )
@@ -356,6 +329,73 @@ class DiscoverRolesService:
             )
         return payload
 
+    def _clean_text(self, value: str) -> str:
+        text = re.sub(r"<[^>]+>", " ", str(value or ""))
+        text = unescape(text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    def _structured_from_ats_stub(self, stub: dict[str, Any]) -> Optional[dict[str, Any]]:
+        description_text = self._clean_text(stub.get("description_text") or stub.get("description_html") or "")
+        if len(description_text) >= settings.discover_min_extracted_text_chars:
+            canonical_url = normalize_url(stub["url"])
+            raw_text_hash = sha256(description_text.encode("utf-8")).hexdigest()
+            remote_mode = str(stub.get("remote_mode") or "unknown")
+            payload = {
+                "canonical_url": canonical_url,
+                "source_urls": sorted(
+                    {
+                        canonical_url,
+                        *(normalize_url(url) for url in [stub.get("apply_url"), stub.get("url")] if url),
+                        # Regional cross-posts collapsed by the provider; keeping
+                        # them means a later search matching a different copy
+                        # merges into this row instead of creating a duplicate.
+                        *(normalize_url(url) for url in (stub.get("duplicate_urls") or []) if url),
+                    }
+                ),
+                "source_domain": stub.get("source_domain") or urlparse(stub["url"]).netloc.lower(),
+                "company": stub.get("company") or "",
+                "job_title": stub.get("title") or "",
+                "matched_title_variant": None,
+                "location": stub.get("location") or "",
+                "remote_mode": remote_mode,
+                "employment_type": stub.get("employment_type") or "unknown",
+                "apply_url": stub.get("apply_url") or stub["url"],
+                "posted_at": stub.get("posted_at"),
+                "posted_label": relative_posted_label(stub.get("posted_at")) or "Date unavailable",
+                "date_confidence": "provider",
+                "archetype": self._cheap_archetype(description_text, None),
+                "extraction_confidence": 0.88,
+                "raw_text": description_text,
+                "raw_text_hash": raw_text_hash,
+                "source_quality": "public_ats",
+                "sponsorship_policy": str(stub.get("sponsorship_policy") or "unknown"),
+                "compensation": stub.get("compensation"),
+            }
+            cache_key = self._structured_cache_key(canonical_url)
+            self.cache.put(
+                "discover_structured_posting",
+                cache_key,
+                payload,
+                source_hash=raw_text_hash,
+                expires_at=self._expiry(settings.discover_posting_recent_ttl_hours),
+            )
+            return payload
+        extracted = self._structured_from_hit({"url": stub["url"]}, None)
+        if not extracted:
+            return None
+        extracted["company"] = stub.get("company") or extracted.get("company")
+        extracted["job_title"] = stub.get("title") or extracted.get("job_title")
+        extracted["location"] = stub.get("location") or extracted.get("location")
+        extracted["remote_mode"] = stub.get("remote_mode") or extracted.get("remote_mode")
+        extracted["employment_type"] = stub.get("employment_type") or extracted.get("employment_type")
+        extracted["apply_url"] = stub.get("apply_url") or extracted.get("apply_url")
+        extracted["source_quality"] = "public_ats"
+        extracted["sponsorship_policy"] = str(stub.get("sponsorship_policy") or "unknown")
+        extracted["compensation"] = stub.get("compensation") or extracted.get("compensation")
+        if not extracted.get("source_domain"):
+            extracted["source_domain"] = stub.get("source_domain") or urlparse(stub["url"]).netloc.lower()
+        return extracted
+
     def _cheap_archetype(self, text: str, matched_title_variant: str | None) -> str:
         haystack = f"{matched_title_variant or ''} {text}".lower()
         for family, variants in ROLE_FAMILY_EXPANSIONS.items():
@@ -379,7 +419,61 @@ class DiscoverRolesService:
             return 15
         if age_days <= 30:
             return 8
-        return 0
+        if age_days <= 90:
+            return 0
+        # Boards keep evergreen and abandoned requisitions listed for years.
+        # Flat-scoring everything past 30 days let a four-year-old posting rank
+        # alongside one from last week, so age keeps costing beyond that.
+        if age_days <= 180:
+            return -15
+        if age_days <= 365:
+            return -35
+        return -60
+
+    def _infer_seniority(self, title: str, text: str) -> str:
+        haystack = f"{title} {text}".lower()
+        patterns = [
+            ("director", [r"\bdirector\b", r"\bhead of\b", r"\bvp\b", r"\bvice president\b"]),
+            ("manager", [r"\bmanager\b", r"\bmgr\b"]),
+            ("principal", [r"\bprincipal\b", r"\bdistinguished\b"]),
+            ("staff", [r"\bstaff\b"]),
+            ("senior", [r"\bsenior\b", r"\bsr\.?\b", r"\blead\b"]),
+            ("mid", [r"\bmid\b", r"\bmid-level\b", r"\bii\b", r"\biii\b"]),
+            ("junior", [r"\bjunior\b", r"\bentry\b", r"\bassociate\b", r"\bintern\b"]),
+        ]
+        for band, band_patterns in patterns:
+            if any(re.search(pattern, haystack) for pattern in band_patterns):
+                return band
+        return "unknown"
+
+    def _infer_sponsorship_signal(self, role: dict[str, Any]) -> str:
+        policy = str(role.get("sponsorship_policy") or "unknown").lower()
+        if policy in {"yes", "supported", "available"}:
+            return "yes"
+        if policy in {"no", "not_supported", "unavailable"}:
+            return "no"
+
+        haystack = f"{role.get('job_title') or ''} {role.get('raw_text') or ''}".lower()
+        positive_patterns = [
+            r"\bvisa sponsorship\b",
+            r"\bsponsorship available\b",
+            r"\bsponsor work authorization\b",
+            r"\bh-?1b\b",
+            r"\bopt\b",
+        ]
+        negative_patterns = [
+            r"\bno visa sponsorship\b",
+            r"\bunable to sponsor\b",
+            r"\bwill not sponsor\b",
+            r"\bwithout sponsorship\b",
+            r"\bmust be authorized to work\b",
+            r"\bno employer sponsorship\b",
+        ]
+        if any(re.search(pattern, haystack) for pattern in negative_patterns):
+            return "no"
+        if any(re.search(pattern, haystack) for pattern in positive_patterns):
+            return "yes"
+        return "unknown"
 
     def _rank_role(self, role: dict[str, Any], normalized: dict[str, Any]) -> tuple[float, list[str], list[str]]:
         score = 0.0
@@ -398,19 +492,34 @@ class DiscoverRolesService:
 
         requested_remote = set(normalized["remote_modes"])
         actual_remote = str(role.get("remote_mode") or "unknown")
+        # Locations arrive as a "; "-joined list. Judge each one separately: a
+        # role open in both "US Remote" and "Dublin" is reachable, and scanning
+        # the joined string would penalise it for the Dublin listing.
+        candidate_locations = [
+            part.strip() for part in str(role.get("location") or "").split(";") if part.strip()
+        ] or [""]
+        surviving_locations = [
+            candidate
+            for candidate in candidate_locations
+            if not self._keyword_hits(candidate.lower(), normalized["exclude_locations"])
+        ]
+        location_blob = " ".join(
+            filter(None, [" ".join(surviving_locations or candidate_locations), str(role.get("raw_text") or "")[:600]])
+        ).lower()
+        include_hits = self._keyword_hits(location_blob, normalized["include_locations"])
+        # Only an outright block counts: every location the role offers is excluded.
+        exclude_hits = (
+            []
+            if surviving_locations
+            else self._keyword_hits(" ".join(candidate_locations).lower(), normalized["exclude_locations"])
+        )
         if requested_remote:
             if actual_remote in requested_remote:
                 score += 15
                 matched_filters.append(actual_remote)
-            elif actual_remote != "unknown":
+            elif actual_remote != "unknown" and not include_hits:
                 score -= 40
                 blockers.append(f"{actual_remote} remote mode")
-
-        location_blob = " ".join(
-            filter(None, [str(role.get("location") or ""), str(role.get("raw_text") or "")[:600]])
-        ).lower()
-        include_hits = self._keyword_hits(location_blob, normalized["include_locations"])
-        exclude_hits = self._keyword_hits(location_blob, normalized["exclude_locations"])
         if normalized["include_locations"]:
             if include_hits:
                 score += 10
@@ -443,6 +552,42 @@ class DiscoverRolesService:
             score += 10
         elif confidence < 0.5:
             score -= 25
+
+        requested_seniority = normalized.get("seniority") or "any"
+        inferred_seniority = self._infer_seniority(
+            str(role.get("job_title") or ""),
+            str(role.get("raw_text") or "")[:1200],
+        )
+        if requested_seniority != "any":
+            seniority_order = {
+                "junior": 0,
+                "mid": 1,
+                "senior": 2,
+                "staff": 3,
+                "principal": 4,
+                "manager": 5,
+                "director": 6,
+            }
+            requested_rank = seniority_order.get(requested_seniority)
+            inferred_rank = seniority_order.get(inferred_seniority)
+            if inferred_seniority == requested_seniority:
+                score += 18
+                matched_filters.append(requested_seniority)
+            elif requested_rank is not None and inferred_rank is not None:
+                if inferred_rank < requested_rank:
+                    score -= 35
+                    blockers.append(f"{inferred_seniority} seniority")
+                elif inferred_rank == requested_rank + 1:
+                    score += 8
+                    matched_filters.append(inferred_seniority)
+        if normalized.get("prefer_visa_sponsorship"):
+            sponsorship_signal = self._infer_sponsorship_signal(role)
+            if sponsorship_signal == "yes":
+                score += 16
+                matched_filters.append("visa sponsorship")
+            elif sponsorship_signal == "no":
+                score -= 24
+                blockers.append("likely no visa sponsorship")
         return score, list(dict.fromkeys(matched_filters)), list(dict.fromkeys(blockers))[:4]
 
     def _fallback_enrichment(self, role: dict[str, Any]) -> dict[str, Any]:
@@ -452,11 +597,7 @@ class DiscoverRolesService:
         if short and not short.endswith("."):
             short += "."
         seniority = "unknown"
-        lower = text.lower()
-        for value in ["principal", "director", "manager", "staff", "senior", "mid", "junior"]:
-            if value in lower:
-                seniority = value
-                break
+        seniority = self._infer_seniority(str(role.get("job_title") or ""), text)
         return {
             "id": role["canonical_url"],
             "tldr": short or f"{role.get('job_title', 'Role')} at {role.get('company', 'Unknown company')}.",
@@ -560,17 +701,11 @@ Do not invent company facts. Do not add blockers not grounded in the page text."
                 "roles": roles,
             }
 
-        query_passes = self._build_query_passes(normalized)
-        raw_hits: list[dict[str, Any]] = []
         try:
-            for query, matched_title_variant in query_passes:
-                hits = self.provider.search(query, settings.discover_max_results_per_variant)
-                for hit in hits[: settings.discover_max_results_per_variant]:
-                    raw_hits.append({**hit, "matched_title_variant": matched_title_variant})
-                    if len({normalize_url(item["url"]) for item in raw_hits}) >= settings.discover_max_fetches_per_search:
-                        break
-                if len({normalize_url(item["url"]) for item in raw_hits}) >= settings.discover_max_fetches_per_search:
-                    break
+            if getattr(self.provider, "name", None) == "ats_api":
+                structured = self._search_ats_structured(normalized)
+            else:
+                structured = self._search_firecrawl_structured(normalized)
         except Exception as exc:
             if stale_cached:
                 warnings.append("Showing previous results because live search failed.")
@@ -586,21 +721,6 @@ Do not invent company facts. Do not add blockers not grounded in the page text."
                     "roles": roles,
                 }
             raise exc
-
-        seen_urls: set[str] = set()
-        structured: list[dict[str, Any]] = []
-        for hit in raw_hits:
-            normalized_url = normalize_url(hit["url"])
-            if normalized_url in seen_urls:
-                continue
-            seen_urls.add(normalized_url)
-            posting = self._structured_from_hit(hit, hit.get("matched_title_variant"))
-            if not posting:
-                continue
-            posting["archetype"] = self._cheap_archetype(posting["raw_text"], posting.get("matched_title_variant"))
-            structured.append(posting)
-            if len(structured) >= settings.discover_max_fetches_per_search:
-                break
 
         ranked = []
         for role in structured:
@@ -660,6 +780,58 @@ Do not invent company facts. Do not add blockers not grounded in the page text."
             "warnings": warnings,
             "roles": stored_roles,
         }
+
+    def _search_firecrawl_structured(self, normalized: dict[str, Any]) -> list[dict[str, Any]]:
+        query_passes = self._build_query_passes(normalized)
+        raw_hits: list[dict[str, Any]] = []
+        for query, matched_title_variant in query_passes:
+            hits = self.provider.search(query, settings.discover_max_results_per_variant)
+            for hit in hits[: settings.discover_max_results_per_variant]:
+                raw_hits.append({**hit, "matched_title_variant": matched_title_variant})
+                if len({normalize_url(item["url"]) for item in raw_hits}) >= settings.discover_max_fetches_per_search:
+                    break
+            if len({normalize_url(item["url"]) for item in raw_hits}) >= settings.discover_max_fetches_per_search:
+                break
+
+        seen_urls: set[str] = set()
+        structured: list[dict[str, Any]] = []
+        for hit in raw_hits:
+            normalized_url = normalize_url(hit["url"])
+            if normalized_url in seen_urls:
+                continue
+            seen_urls.add(normalized_url)
+            posting = self._structured_from_hit(hit, hit.get("matched_title_variant"))
+            if not posting:
+                continue
+            posting["archetype"] = self._cheap_archetype(posting["raw_text"], posting.get("matched_title_variant"))
+            structured.append(posting)
+            if len(structured) >= settings.discover_max_fetches_per_search:
+                break
+        return structured
+
+    def _search_ats_structured(self, normalized: dict[str, Any]) -> list[dict[str, Any]]:
+        # `discover_max_fetches_per_search` bounds page fetches, which is what the
+        # search-and-scrape provider spends per result. The ATS provider carries
+        # job bodies in the feed itself and bounds its own detail fetches, so
+        # sizing this request by the fetch budget would throttle it to a fraction
+        # of what the catalog returns.
+        stubs = self.provider.fetch_stubs(normalized, settings.discover_max_survivors)
+        structured: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        for stub in stubs:
+            normalized_url = normalize_url(stub["url"])
+            if normalized_url in seen_urls:
+                continue
+            seen_urls.add(normalized_url)
+            posting = self._structured_from_ats_stub(stub)
+            if not posting:
+                continue
+            posting["matched_filters"] = list(dict.fromkeys([*(stub.get("matched_filters") or []), *(posting.get("matched_filters") or [])]))
+            posting["archetype"] = posting.get("archetype") or self._cheap_archetype(posting["raw_text"], posting.get("matched_title_variant"))
+            structured.append(posting)
+            if len(structured) >= settings.discover_max_survivors:
+                break
+        return structured
 
     def list_roles(self, user_id: int, inbox_state: str = "active", search: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         return list_discovered_roles_for_user(user_id, inbox_state=inbox_state, search=search, limit=limit)

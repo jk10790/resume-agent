@@ -75,3 +75,7 @@ applications.db
 .agent_cache/
 .cache/
 tailoring_cache.json
+.env.bak*
+
+# Derived from DOL PERM disclosure data; regenerate with scripts/build_sponsors.py
+config/sponsors.json

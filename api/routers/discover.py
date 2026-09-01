@@ -6,11 +6,13 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from .auth import get_local_user
+from resume_agent.config import settings
 from resume_agent.services.discover_roles_service import (
     DiscoverConfigError,
     DiscoverRolesService,
     DiscoverSearchCriteria,
 )
+from resume_agent.services.llm_service import LLMService
 
 
 router = APIRouter(prefix="/api/discover", tags=["discover"])
@@ -25,6 +27,7 @@ class DiscoverSearchRequest(BaseModel):
     exclude_locations: list[str] = Field(default_factory=list)
     must_have_keywords: list[str] = Field(default_factory=list)
     avoid_keywords: list[str] = Field(default_factory=list)
+    prefer_visa_sponsorship: bool = False
     page_size: int = 20
     refresh: bool = False
 
@@ -54,7 +57,13 @@ class DiscoverySuggestionActionRequest(BaseModel):
 
 
 def _service() -> DiscoverRolesService:
-    return DiscoverRolesService()
+    llm_service = None
+    if settings.discover_llm_enrichment_provider != "none":
+        llm_service = LLMService(
+            provider_type=settings.discover_llm_enrichment_provider,
+            model_name=settings.discover_llm_enrichment_model,
+        )
+    return DiscoverRolesService(llm_service=llm_service)
 
 
 @router.get("/status")

@@ -1,0 +1,11 @@
+{
+  "jobs": [
+    {
+      "title": "Senior Backend Engineer",
+      "absolute_url": "https://job-boards.greenhouse.io/example/jobs/123",
+      "location": {"name": "Remote - United States"},
+      "updated_at": "2026-04-20T12:00:00Z",
+      "content": "<p>Build APIs and distributed systems.</p>"
+    }
+  ]
+}
