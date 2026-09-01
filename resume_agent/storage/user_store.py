@@ -225,6 +225,7 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             short_tldr TEXT NOT NULL DEFAULT '',
             matched_filters_json TEXT NOT NULL DEFAULT '[]',
             possible_blockers_json TEXT NOT NULL DEFAULT '[]',
+            compensation TEXT,
             rank_score REAL NOT NULL DEFAULT 0.0,
             inbox_state TEXT NOT NULL DEFAULT 'discovered',
             opened_in_tailor_at TEXT,
@@ -241,6 +242,12 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    discovered_role_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(discovered_roles)").fetchall()
+    }
+    if "compensation" not in discovered_role_columns:
+        conn.execute("ALTER TABLE discovered_roles ADD COLUMN compensation TEXT")
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS discovered_role_feedback (
@@ -861,6 +868,7 @@ def save_or_merge_discovered_role_for_user(user_id: int, role_payload: Dict[str,
                     location = ?, remote_mode = ?, employment_type = ?, apply_url = ?, posted_at = ?, posted_label = ?,
                     date_confidence = ?, archetype = ?, extraction_confidence = ?, raw_text = ?, raw_text_hash = ?,
                     short_tldr = ?, matched_filters_json = ?, possible_blockers_json = ?, rank_score = ?,
+                    compensation = ?,
                     last_seen_at = ?, last_scraped_at = ?, last_ranked_at = ?, updated_at = ?
                 WHERE id = ? AND user_id = ?
                 """,
@@ -885,6 +893,7 @@ def save_or_merge_discovered_role_for_user(user_id: int, role_payload: Dict[str,
                     _json_dumps(role_payload.get("matched_filters") or []),
                     _json_dumps(role_payload.get("possible_blockers") or []),
                     float(role_payload.get("rank_score") or 0.0),
+                    role_payload.get("compensation"),
                     now,
                     role_payload.get("last_scraped_at") or now,
                     role_payload.get("last_ranked_at") or now,
@@ -901,9 +910,9 @@ def save_or_merge_discovered_role_for_user(user_id: int, role_payload: Dict[str,
                     user_id, canonical_url, source_urls_json, source_domain, company, job_title, matched_title_variant,
                     location, remote_mode, employment_type, apply_url, posted_at, posted_label, date_confidence,
                     archetype, extraction_confidence, raw_text, raw_text_hash, short_tldr, matched_filters_json,
-                    possible_blockers_json, rank_score, inbox_state, opened_in_tailor_at, opened_strategy_brief_id,
+                    possible_blockers_json, rank_score, compensation, inbox_state, opened_in_tailor_at, opened_strategy_brief_id,
                     first_seen_at, last_seen_at, last_scraped_at, last_ranked_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'discovered', NULL, NULL, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'discovered', NULL, NULL, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
@@ -928,6 +937,7 @@ def save_or_merge_discovered_role_for_user(user_id: int, role_payload: Dict[str,
                     _json_dumps(role_payload.get("matched_filters") or []),
                     _json_dumps(role_payload.get("possible_blockers") or []),
                     float(role_payload.get("rank_score") or 0.0),
+                    role_payload.get("compensation"),
                     now,
                     now,
                     role_payload.get("last_scraped_at") or now,

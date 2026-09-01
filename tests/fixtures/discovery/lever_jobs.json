@@ -1,0 +1,12 @@
+[
+  {
+    "text": "Principal Software Engineer",
+    "hostedUrl": "https://jobs.lever.co/example/xyz",
+    "applyUrl": "https://jobs.lever.co/example/apply/xyz",
+    "categories": {
+      "location": "New York, NY",
+      "commitment": "Full-time"
+    },
+    "descriptionPlain": "Own backend systems and platform reliability."
+  }
+]

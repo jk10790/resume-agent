@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from api.main import app
 from resume_agent.services.resume_workflow import TailorResumeResult, WorkflowStep
+from resume_agent.services.discover_roles_service import DiscoverConfigError
 
 
 def _mock_local_user(_request):
@@ -95,6 +96,19 @@ def test_discover_analytics_endpoint(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["feedback_total"] == 17
+
+
+def test_discover_search_returns_503_when_not_configured(monkeypatch):
+    client = TestClient(app)
+    monkeypatch.setattr("api.routers.discover.get_local_user", _mock_local_user)
+    service = Mock()
+    service.search_roles.side_effect = DiscoverConfigError("missing provider")
+    monkeypatch.setattr("api.routers.discover._service", lambda: service)
+
+    response = client.post("/api/discover/search", json={"search_intent": "backend"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "missing provider"
 
 
 def test_tailor_resume_request_disables_application_tracking_for_discovery(monkeypatch):

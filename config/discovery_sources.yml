@@ -1,0 +1,2513 @@
+version: 1
+title_guardrails:
+  positive:
+  - software engineer
+  - backend engineer
+  - platform engineer
+  - staff engineer
+  - principal engineer
+  - lead software engineer
+  negative:
+  - intern
+  - recruiter
+  - designer
+  - sales
+  - customer success
+  - frontend
+  seniority_boost:
+  - senior
+  - staff
+  - lead
+  - principal
+body_guardrails:
+  exclude:
+  - security clearance|\bTS/SCI\b|\bpolygraph\b|\bTop Secret\b|\bSecret clearance\b
+  - must be (a |an )?(US|U\.S\.) citizen|US citizenship (is )?required|U\.S\. citizenship (is )?required
+  - \bmust be able to obtain (a )?(security )?clearance\b
+  - \bITAR\b|\bEAR99\b|\bexport[- ]control(?:led|s)?\b|\bexport administration regulations\b
+  - must be a[n]?(?:\s*\(?[ivx]+\)?)?\s*(?:U\.?S\.?|United States)\s*(?:citizen|person|national)
+  - not (be )?(able|willing) to sponsor|unable to sponsor|will not sponsor|no visa sponsorship|without (visa )?sponsorship|do(es)? not (offer|provide) (visa )?sponsorship
+  discipline_exclude:
+  - \b(is )?looking for an? (frontend|front-end|mobile|ios|android|design) engineer\b
+  - \bwe are (seeking|hiring) an? (frontend|front-end|mobile|ios|android) engineer\b
+  - \b(frontend|front-end) engineer to (build|own|lead)\b
+  - \bbuild the design system\b
+tracked_companies:
+- name: Capital One
+  enabled: true
+  provider: workday
+  careers_url: https://capitalone.wd12.myworkdayjobs.com/Capital_One
+  api_url: https://capitalone.wd12.myworkdayjobs.com/wday/cxs/capitalone/Capital_One/jobs
+  tags:
+  - fintech
+  - dc-metro
+  sponsorship_policy: 'yes'
+- name: SmartRecruiters
+  enabled: true
+  provider: smartrecruiters
+  careers_url: https://jobs.smartrecruiters.com/smartrecruiters
+  api_url: https://api.smartrecruiters.com/v1/companies/smartrecruiters/postings
+  tags:
+  - hr-tech
+  sponsorship_policy: unknown
+- name: Anthropic
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/anthropic
+  api_url: https://boards-api.greenhouse.io/v1/boards/anthropic/jobs?content=true
+  tags:
+  - ai
+  - product
+  sponsorship_policy: 'yes'
+- name: Vercel
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/vercel
+  api_url: https://boards-api.greenhouse.io/v1/boards/vercel/jobs?content=true
+  tags:
+  - developer-tools
+  - product
+  sponsorship_policy: 'yes'
+- name: Airtable
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/airtable
+  api_url: https://boards-api.greenhouse.io/v1/boards/airtable/jobs?content=true
+  tags:
+  - developer-tools
+  - product
+  sponsorship_policy: unknown
+- name: Datadog
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/datadog
+  api_url: https://boards-api.greenhouse.io/v1/boards/datadog/jobs?content=true
+  tags:
+  - observability
+  - infrastructure
+  sponsorship_policy: 'yes'
+- name: MongoDB
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/mongodb
+  api_url: https://boards-api.greenhouse.io/v1/boards/mongodb/jobs?content=true
+  tags:
+  - database
+  - platform
+  sponsorship_policy: 'yes'
+- name: Stripe
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/stripe
+  api_url: https://boards-api.greenhouse.io/v1/boards/stripe/jobs?content=true
+  tags:
+  - payments
+  - backend
+  sponsorship_policy: 'yes'
+- name: SentinelOne
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/sentinellabs
+  api_url: https://boards-api.greenhouse.io/v1/boards/sentinellabs/jobs?content=true
+  tags:
+  - security
+  - platform
+  sponsorship_policy: 'yes'
+- name: Anduril
+  enabled: false
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/andurilindustries
+  api_url: https://boards-api.greenhouse.io/v1/boards/andurilindustries/jobs?content=true
+  tags:
+  - defense
+  - platform
+  sponsorship_policy: unknown
+- name: Elastic
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/elastic
+  api_url: https://boards-api.greenhouse.io/v1/boards/elastic/jobs?content=true
+  tags:
+  - search
+  - platform
+  sponsorship_policy: unknown
+- name: Temporal
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/temporal
+  api_url: https://api.ashbyhq.com/posting-api/job-board/temporal?includeCompensation=true
+  tags:
+  - infrastructure
+  - developer-tools
+  sponsorship_policy: 'yes'
+- name: Arize AI
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/arizeai
+  api_url: https://boards-api.greenhouse.io/v1/boards/arizeai/jobs?content=true
+  tags:
+  - ai
+  - observability
+  sponsorship_policy: unknown
+- name: RunPod
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/runpod
+  api_url: https://api.ashbyhq.com/posting-api/job-board/runpod?includeCompensation=true
+  tags:
+  - ai
+  - infrastructure
+  sponsorship_policy: unknown
+- name: Glean
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/gleanwork
+  api_url: https://boards-api.greenhouse.io/v1/boards/gleanwork/jobs?content=true
+  tags:
+  - ai
+  - enterprise
+  sponsorship_policy: 'yes'
+- name: Intercom
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/intercom
+  api_url: https://boards-api.greenhouse.io/v1/boards/intercom/jobs?content=true
+  tags:
+  - product
+  - platform
+  sponsorship_policy: unknown
+- name: Hume AI
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/humeai
+  api_url: https://boards-api.greenhouse.io/v1/boards/humeai/jobs?content=true
+  tags:
+  - ai
+  - voice
+  sponsorship_policy: unknown
+- name: Speechmatics
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/speechmatics
+  api_url: https://boards-api.greenhouse.io/v1/boards/speechmatics/jobs?content=true
+  tags:
+  - ai
+  - voice
+  sponsorship_policy: unknown
+- name: Black Forest Labs
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/black-forest-labs
+  api_url: https://api.ashbyhq.com/posting-api/job-board/black-forest-labs?includeCompensation=true
+  tags:
+  - ai
+  - research
+  sponsorship_policy: unknown
+- name: Contentful
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/contentful
+  api_url: https://boards-api.greenhouse.io/v1/boards/contentful/jobs?content=true
+  tags:
+  - platform
+  - saas
+  sponsorship_policy: unknown
+- name: Wayve
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/wayve
+  api_url: https://boards-api.greenhouse.io/v1/boards/wayve/jobs?content=true
+  tags:
+  - ai
+  - autonomy
+  sponsorship_policy: 'yes'
+- name: PhysicsX
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/physicsx
+  api_url: https://boards-api.greenhouse.io/v1/boards/physicsx/jobs?content=true
+  tags:
+  - ai
+  - engineering
+  sponsorship_policy: unknown
+- name: Stability AI
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/stabilityai
+  api_url: https://boards-api.greenhouse.io/v1/boards/stabilityai/jobs?content=true
+  tags:
+  - ai
+  - research
+  sponsorship_policy: unknown
+- name: Runway
+  enabled: false
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/runwayml
+  api_url: https://boards-api.greenhouse.io/v1/boards/runwayml/jobs?content=true
+  tags:
+  - ai
+  - video
+  sponsorship_policy: unknown
+- name: Hightouch
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/hightouch
+  api_url: https://boards-api.greenhouse.io/v1/boards/hightouch/jobs?content=true
+  tags:
+  - data
+  - saas
+  sponsorship_policy: unknown
+- name: Planetscale
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/planetscale
+  api_url: https://boards-api.greenhouse.io/v1/boards/planetscale/jobs?content=true
+  tags:
+  - database
+  - developer-tools
+  sponsorship_policy: 'yes'
+- name: ElevenLabs
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/elevenlabs
+  api_url: https://api.ashbyhq.com/posting-api/job-board/elevenlabs?includeCompensation=true
+  tags:
+  - ai
+  - voice
+  sponsorship_policy: unknown
+- name: Deepgram
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/deepgram
+  api_url: https://api.ashbyhq.com/posting-api/job-board/deepgram?includeCompensation=true
+  tags:
+  - ai
+  - voice
+  sponsorship_policy: unknown
+- name: Vapi
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/vapi
+  api_url: https://api.ashbyhq.com/posting-api/job-board/vapi?includeCompensation=true
+  tags:
+  - ai
+  - voice
+  sponsorship_policy: unknown
+- name: Bland AI
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/bland
+  api_url: https://api.ashbyhq.com/posting-api/job-board/bland?includeCompensation=true
+  tags:
+  - ai
+  - voice
+  sponsorship_policy: unknown
+- name: n8n
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/n8n
+  api_url: https://api.ashbyhq.com/posting-api/job-board/n8n?includeCompensation=true
+  tags:
+  - automation
+  - developer-tools
+  sponsorship_policy: unknown
+- name: Zapier
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/zapier
+  api_url: https://api.ashbyhq.com/posting-api/job-board/zapier?includeCompensation=true
+  tags:
+  - automation
+  - developer-tools
+  sponsorship_policy: unknown
+- name: Cohere
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/cohere
+  api_url: https://api.ashbyhq.com/posting-api/job-board/cohere?includeCompensation=true
+  tags:
+  - ai
+  - llm
+  sponsorship_policy: 'yes'
+- name: LangChain
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/langchain
+  api_url: https://api.ashbyhq.com/posting-api/job-board/langchain?includeCompensation=true
+  tags:
+  - ai
+  - developer-tools
+  sponsorship_policy: 'yes'
+- name: Pinecone
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/pinecone
+  api_url: https://api.ashbyhq.com/posting-api/job-board/pinecone?includeCompensation=true
+  tags:
+  - ai
+  - database
+  sponsorship_policy: 'yes'
+- name: Attio
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/attio
+  api_url: https://api.ashbyhq.com/posting-api/job-board/attio?includeCompensation=true
+  tags:
+  - saas
+  - crm
+  sponsorship_policy: unknown
+- name: Tinybird
+  enabled: false
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/tinybird
+  api_url: https://api.ashbyhq.com/posting-api/job-board/tinybird?includeCompensation=true
+  tags:
+  - data
+  - developer-tools
+  sponsorship_policy: unknown
+- name: Perplexity
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/perplexity
+  api_url: https://api.ashbyhq.com/posting-api/job-board/perplexity?includeCompensation=true
+  tags:
+  - ai
+  - search
+  sponsorship_policy: 'yes'
+- name: Clay
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/claylabs
+  api_url: https://api.ashbyhq.com/posting-api/job-board/claylabs?includeCompensation=true
+  tags:
+  - automation
+  - growth
+  sponsorship_policy: unknown
+- name: WorkOS
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/workos
+  api_url: https://api.ashbyhq.com/posting-api/job-board/workos?includeCompensation=true
+  tags:
+  - developer-tools
+  - identity
+  sponsorship_policy: 'yes'
+- name: Supabase
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/supabase
+  api_url: https://api.ashbyhq.com/posting-api/job-board/supabase?includeCompensation=true
+  tags:
+  - database
+  - developer-tools
+  sponsorship_policy: 'yes'
+- name: Resend
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/resend
+  api_url: https://api.ashbyhq.com/posting-api/job-board/resend?includeCompensation=true
+  tags:
+  - developer-tools
+  - api
+  sponsorship_policy: unknown
+- name: Clerk
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/clerk
+  api_url: https://api.ashbyhq.com/posting-api/job-board/clerk?includeCompensation=true
+  tags:
+  - developer-tools
+  - identity
+  sponsorship_policy: unknown
+- name: Inngest
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/inngest
+  api_url: https://api.ashbyhq.com/posting-api/job-board/inngest?includeCompensation=true
+  tags:
+  - developer-tools
+  - workflow
+  sponsorship_policy: unknown
+- name: Mistral AI
+  enabled: true
+  provider: lever
+  careers_url: https://jobs.lever.co/mistral
+  api_url: https://api.lever.co/v0/postings/mistral?mode=json
+  tags:
+  - ai
+  - llm
+  sponsorship_policy: unknown
+- name: Weights & Biases
+  enabled: false
+  provider: lever
+  careers_url: https://jobs.lever.co/wandb
+  api_url: https://api.lever.co/v0/postings/wandb?mode=json
+  tags:
+  - ai
+  - developer-tools
+  sponsorship_policy: 'yes'
+- name: Palantir
+  enabled: true
+  provider: lever
+  careers_url: https://jobs.lever.co/palantir
+  api_url: https://api.lever.co/v0/postings/palantir?mode=json
+  tags:
+  - platform
+  - enterprise
+  sponsorship_policy: 'yes'
+- name: Alarm.com
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/alarmcom
+  api_url: https://boards-api.greenhouse.io/v1/boards/alarmcom/jobs?content=true
+  tags:
+  - resolved
+  sponsorship_policy: 'yes'
+- name: Assured
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/assured
+  api_url: https://api.ashbyhq.com/posting-api/job-board/assured?includeCompensation=true
+  tags:
+  - resolved
+  sponsorship_policy: unknown
+- name: CDK Global
+  enabled: true
+  provider: smartrecruiters
+  careers_url: https://jobs.smartrecruiters.com/cdkglobal
+  api_url: https://api.smartrecruiters.com/v1/companies/cdkglobal/postings
+  tags:
+  - resolved
+  sponsorship_policy: unknown
+- name: Squarespace
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/squarespace
+  api_url: https://boards-api.greenhouse.io/v1/boards/squarespace/jobs?content=true
+  tags:
+  - resolved
+  sponsorship_policy: 'yes'
+- name: SageSure Insurance Managers
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/sagesure
+  api_url: https://boards-api.greenhouse.io/v1/boards/sagesure/jobs?content=true
+  tags:
+  - resolved
+  sponsorship_policy: unknown
+- name: ServiceNow
+  enabled: true
+  provider: smartrecruiters
+  careers_url: https://jobs.smartrecruiters.com/servicenow
+  api_url: https://api.smartrecruiters.com/v1/companies/servicenow/postings
+  tags:
+  - resolved
+  sponsorship_policy: 'yes'
+- name: Valon Tech
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/valon
+  api_url: https://api.ashbyhq.com/posting-api/job-board/valon?includeCompensation=true
+  tags:
+  - resolved
+  sponsorship_policy: unknown
+- name: openai
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/openai
+  api_url: https://api.ashbyhq.com/posting-api/job-board/openai?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: affirm
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/affirm
+  api_url: https://boards-api.greenhouse.io/v1/boards/affirm/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: crusoe
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/crusoe
+  api_url: https://api.ashbyhq.com/posting-api/job-board/crusoe?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: reddit
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/reddit
+  api_url: https://boards-api.greenhouse.io/v1/boards/reddit/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: axon
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/axon
+  api_url: https://boards-api.greenhouse.io/v1/boards/axon/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: harvey
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/harvey
+  api_url: https://api.ashbyhq.com/posting-api/job-board/harvey?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: bjakcareer
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/bjakcareer
+  api_url: https://api.ashbyhq.com/posting-api/job-board/bjakcareer?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: brex
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/brex
+  api_url: https://boards-api.greenhouse.io/v1/boards/brex/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: robinhood
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/robinhood
+  api_url: https://boards-api.greenhouse.io/v1/boards/robinhood/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: upstart
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/upstart
+  api_url: https://boards-api.greenhouse.io/v1/boards/upstart/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: verkada
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/verkada
+  api_url: https://boards-api.greenhouse.io/v1/boards/verkada/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: nebius
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/nebius
+  api_url: https://boards-api.greenhouse.io/v1/boards/nebius/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: sonyinteractiveentertainmentglobal
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/sonyinteractiveentertainmentglobal
+  api_url: https://boards-api.greenhouse.io/v1/boards/sonyinteractiveentertainmentglobal/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: drweng
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/drweng
+  api_url: https://boards-api.greenhouse.io/v1/boards/drweng/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: canonical
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/canonical
+  api_url: https://boards-api.greenhouse.io/v1/boards/canonical/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: klaviyo
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/klaviyo
+  api_url: https://boards-api.greenhouse.io/v1/boards/klaviyo/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: lilasciences
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/lilasciences
+  api_url: https://boards-api.greenhouse.io/v1/boards/lilasciences/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: flyzipline
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/flyzipline
+  api_url: https://boards-api.greenhouse.io/v1/boards/flyzipline/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: gusto
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/gusto
+  api_url: https://boards-api.greenhouse.io/v1/boards/gusto/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: whoop
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/whoop
+  api_url: https://api.ashbyhq.com/posting-api/job-board/whoop?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: airbnb
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/airbnb
+  api_url: https://boards-api.greenhouse.io/v1/boards/airbnb/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: sierra
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/sierra
+  api_url: https://api.ashbyhq.com/posting-api/job-board/sierra?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: coupang
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/coupang
+  api_url: https://boards-api.greenhouse.io/v1/boards/coupang/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: ripple
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/ripple
+  api_url: https://boards-api.greenhouse.io/v1/boards/ripple/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: discord
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/discord
+  api_url: https://boards-api.greenhouse.io/v1/boards/discord/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: fluidstack
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/fluidstack
+  api_url: https://api.ashbyhq.com/posting-api/job-board/fluidstack?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: ixllearning
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/ixllearning
+  api_url: https://boards-api.greenhouse.io/v1/boards/ixllearning/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: samsara
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/samsara
+  api_url: https://boards-api.greenhouse.io/v1/boards/samsara/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: xai
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/xai
+  api_url: https://boards-api.greenhouse.io/v1/boards/xai/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: archer56
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/archer56
+  api_url: https://boards-api.greenhouse.io/v1/boards/archer56/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: fivetran
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/fivetran
+  api_url: https://boards-api.greenhouse.io/v1/boards/fivetran/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: plaid
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/plaid
+  api_url: https://api.ashbyhq.com/posting-api/job-board/plaid?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: wayve
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/wayve
+  api_url: https://api.ashbyhq.com/posting-api/job-board/wayve?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: twilio
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/twilio
+  api_url: https://boards-api.greenhouse.io/v1/boards/twilio/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: cerebras
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/cerebras
+  api_url: https://api.ashbyhq.com/posting-api/job-board/cerebras?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: mercor
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/mercor
+  api_url: https://api.ashbyhq.com/posting-api/job-board/mercor?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: xometry
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/xometry
+  api_url: https://boards-api.greenhouse.io/v1/boards/xometry/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: baseten
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/baseten
+  api_url: https://api.ashbyhq.com/posting-api/job-board/baseten?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: cursor
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/cursor
+  api_url: https://api.ashbyhq.com/posting-api/job-board/cursor?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: pear-vc
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/pear-vc
+  api_url: https://api.ashbyhq.com/posting-api/job-board/pear-vc?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: chime
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/chime
+  api_url: https://boards-api.greenhouse.io/v1/boards/chime/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: drata
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/drata
+  api_url: https://api.ashbyhq.com/posting-api/job-board/drata?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: figma
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/figma
+  api_url: https://boards-api.greenhouse.io/v1/boards/figma/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: gitlab
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/gitlab
+  api_url: https://boards-api.greenhouse.io/v1/boards/gitlab/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: pragmatike
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/pragmatike
+  api_url: https://api.ashbyhq.com/posting-api/job-board/pragmatike?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: scaleai
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/scaleai
+  api_url: https://boards-api.greenhouse.io/v1/boards/scaleai/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: toast
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/toast
+  api_url: https://boards-api.greenhouse.io/v1/boards/toast/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: docker
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/docker
+  api_url: https://api.ashbyhq.com/posting-api/job-board/docker?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: fanduel
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/fanduel
+  api_url: https://boards-api.greenhouse.io/v1/boards/fanduel/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: airwallex
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/airwallex
+  api_url: https://api.ashbyhq.com/posting-api/job-board/airwallex?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: alphasense
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/alphasense
+  api_url: https://boards-api.greenhouse.io/v1/boards/alphasense/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: instacart
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/instacart
+  api_url: https://boards-api.greenhouse.io/v1/boards/instacart/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: ramp
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/ramp
+  api_url: https://api.ashbyhq.com/posting-api/job-board/ramp?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: relativity
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/relativity
+  api_url: https://boards-api.greenhouse.io/v1/boards/relativity/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: replit
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/replit
+  api_url: https://api.ashbyhq.com/posting-api/job-board/replit?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: chainguard
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/chainguard
+  api_url: https://boards-api.greenhouse.io/v1/boards/chainguard/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: kodiak
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/kodiak
+  api_url: https://boards-api.greenhouse.io/v1/boards/kodiak/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: lambda
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/lambda
+  api_url: https://api.ashbyhq.com/posting-api/job-board/lambda?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: addepar1
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/addepar1
+  api_url: https://boards-api.greenhouse.io/v1/boards/addepar1/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: asana
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/asana
+  api_url: https://boards-api.greenhouse.io/v1/boards/asana/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: commure
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/commure
+  api_url: https://api.ashbyhq.com/posting-api/job-board/commure?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: decagon
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/decagon
+  api_url: https://api.ashbyhq.com/posting-api/job-board/decagon?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: faire
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/faire
+  api_url: https://boards-api.greenhouse.io/v1/boards/faire/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: hinge-health
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/hinge-health
+  api_url: https://api.ashbyhq.com/posting-api/job-board/hinge-health?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: metropolis
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/metropolis
+  api_url: https://boards-api.greenhouse.io/v1/boards/metropolis/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: point72
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/point72
+  api_url: https://boards-api.greenhouse.io/v1/boards/point72/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: trm-labs
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/trm-labs
+  api_url: https://api.ashbyhq.com/posting-api/job-board/trm-labs?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: vanta
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/vanta
+  api_url: https://api.ashbyhq.com/posting-api/job-board/vanta?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: attentive
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/attentive
+  api_url: https://boards-api.greenhouse.io/v1/boards/attentive/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: braze
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/braze
+  api_url: https://boards-api.greenhouse.io/v1/boards/braze/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: launchdarkly
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/launchdarkly
+  api_url: https://boards-api.greenhouse.io/v1/boards/launchdarkly/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: liveviewtechnologiesinc
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/liveviewtechnologiesinc
+  api_url: https://boards-api.greenhouse.io/v1/boards/liveviewtechnologiesinc/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: sentry
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/sentry
+  api_url: https://api.ashbyhq.com/posting-api/job-board/sentry?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: zetaglobal
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/zetaglobal
+  api_url: https://boards-api.greenhouse.io/v1/boards/zetaglobal/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: dragos
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/dragos
+  api_url: https://boards-api.greenhouse.io/v1/boards/dragos/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: rdccareers
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/rdccareers
+  api_url: https://boards-api.greenhouse.io/v1/boards/rdccareers/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: sprinter-health
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/sprinter-health
+  api_url: https://api.ashbyhq.com/posting-api/job-board/sprinter-health?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: togetherai
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/togetherai
+  api_url: https://boards-api.greenhouse.io/v1/boards/togetherai/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: aerovect
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/aerovect
+  api_url: https://api.ashbyhq.com/posting-api/job-board/aerovect?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: justworks
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/justworks
+  api_url: https://boards-api.greenhouse.io/v1/boards/justworks/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: oscar
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/oscar
+  api_url: https://boards-api.greenhouse.io/v1/boards/oscar/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: polymarket
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/polymarket
+  api_url: https://api.ashbyhq.com/posting-api/job-board/polymarket?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: render
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/render
+  api_url: https://api.ashbyhq.com/posting-api/job-board/render?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: apptronik
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/apptronik
+  api_url: https://boards-api.greenhouse.io/v1/boards/apptronik/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: bedrock-robotics
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/bedrock-robotics
+  api_url: https://api.ashbyhq.com/posting-api/job-board/bedrock-robotics?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: cresta
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/cresta
+  api_url: https://boards-api.greenhouse.io/v1/boards/cresta/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: cribl
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/cribl
+  api_url: https://boards-api.greenhouse.io/v1/boards/cribl/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: generalmatter
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/generalmatter
+  api_url: https://boards-api.greenhouse.io/v1/boards/generalmatter/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: grafanalabs
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/grafanalabs
+  api_url: https://boards-api.greenhouse.io/v1/boards/grafanalabs/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: natera
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/natera
+  api_url: https://boards-api.greenhouse.io/v1/boards/natera/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: otterai
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/otterai
+  api_url: https://boards-api.greenhouse.io/v1/boards/otterai/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: skildai-careers
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/skildai-careers
+  api_url: https://boards-api.greenhouse.io/v1/boards/skildai-careers/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: skydio
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/skydio
+  api_url: https://api.ashbyhq.com/posting-api/job-board/skydio?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: tailscale
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/tailscale
+  api_url: https://boards-api.greenhouse.io/v1/boards/tailscale/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: clear
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/clear
+  api_url: https://boards-api.greenhouse.io/v1/boards/clear/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: freeformfuturecorp
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/freeformfuturecorp
+  api_url: https://boards-api.greenhouse.io/v1/boards/freeformfuturecorp/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: gatikaiinc
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/gatikaiinc
+  api_url: https://boards-api.greenhouse.io/v1/boards/gatikaiinc/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: headway
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/headway
+  api_url: https://api.ashbyhq.com/posting-api/job-board/headway?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: lightningai
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/lightningai
+  api_url: https://boards-api.greenhouse.io/v1/boards/lightningai/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: neuralink
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/neuralink
+  api_url: https://boards-api.greenhouse.io/v1/boards/neuralink/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: nooks
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/nooks
+  api_url: https://api.ashbyhq.com/posting-api/job-board/nooks?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: notion
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/notion
+  api_url: https://api.ashbyhq.com/posting-api/job-board/notion?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: rula
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/rula
+  api_url: https://api.ashbyhq.com/posting-api/job-board/rula?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: tenex
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/tenex
+  api_url: https://api.ashbyhq.com/posting-api/job-board/tenex?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: alpaca
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/alpaca
+  api_url: https://boards-api.greenhouse.io/v1/boards/alpaca/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: astronomer
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/astronomer
+  api_url: https://api.ashbyhq.com/posting-api/job-board/astronomer?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: brainco
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/brainco
+  api_url: https://api.ashbyhq.com/posting-api/job-board/brainco?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: confluent
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/confluent
+  api_url: https://api.ashbyhq.com/posting-api/job-board/confluent?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: eliseai
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/eliseai
+  api_url: https://api.ashbyhq.com/posting-api/job-board/eliseai?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: fieldguide
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/fieldguide
+  api_url: https://api.ashbyhq.com/posting-api/job-board/fieldguide?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: gamma
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/gamma
+  api_url: https://api.ashbyhq.com/posting-api/job-board/gamma?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: pathrobotics
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/pathrobotics
+  api_url: https://boards-api.greenhouse.io/v1/boards/pathrobotics/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: seatgeek
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/seatgeek
+  api_url: https://boards-api.greenhouse.io/v1/boards/seatgeek/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: zocdoc
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/zocdoc
+  api_url: https://boards-api.greenhouse.io/v1/boards/zocdoc/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: 1x
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/1x
+  api_url: https://api.ashbyhq.com/posting-api/job-board/1x?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: 2k
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/2k
+  api_url: https://boards-api.greenhouse.io/v1/boards/2k/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: abnormalsecurity
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/abnormalsecurity
+  api_url: https://boards-api.greenhouse.io/v1/boards/abnormalsecurity/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: benchling
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/benchling
+  api_url: https://api.ashbyhq.com/posting-api/job-board/benchling?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: crunchyroll
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/crunchyroll
+  api_url: https://boards-api.greenhouse.io/v1/boards/crunchyroll/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: dialpad
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/dialpad
+  api_url: https://boards-api.greenhouse.io/v1/boards/dialpad/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: diligentcorporation
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/diligentcorporation
+  api_url: https://boards-api.greenhouse.io/v1/boards/diligentcorporation/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: goteleport
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/goteleport
+  api_url: https://api.ashbyhq.com/posting-api/job-board/goteleport?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: kong
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/kong
+  api_url: https://api.ashbyhq.com/posting-api/job-board/kong?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: nimblerobotics
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/nimblerobotics
+  api_url: https://boards-api.greenhouse.io/v1/boards/nimblerobotics/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: okx
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/okx
+  api_url: https://boards-api.greenhouse.io/v1/boards/okx/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: pivotal-health
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/pivotal-health
+  api_url: https://api.ashbyhq.com/posting-api/job-board/pivotal-health?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: radar
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/radar
+  api_url: https://api.ashbyhq.com/posting-api/job-board/radar?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: socure
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/socure
+  api_url: https://api.ashbyhq.com/posting-api/job-board/socure?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: tebra
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/tebra
+  api_url: https://boards-api.greenhouse.io/v1/boards/tebra/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: vultr
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/vultr
+  api_url: https://api.ashbyhq.com/posting-api/job-board/vultr?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: allencontrolsystems
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/allencontrolsystems
+  api_url: https://boards-api.greenhouse.io/v1/boards/allencontrolsystems/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: coherehealth
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/coherehealth
+  api_url: https://boards-api.greenhouse.io/v1/boards/coherehealth/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: datacamp
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/datacamp
+  api_url: https://boards-api.greenhouse.io/v1/boards/datacamp/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: everlaw
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/everlaw
+  api_url: https://boards-api.greenhouse.io/v1/boards/everlaw/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: geniussports
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/geniussports
+  api_url: https://boards-api.greenhouse.io/v1/boards/geniussports/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: gofundme
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/gofundme
+  api_url: https://boards-api.greenhouse.io/v1/boards/gofundme/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: hextechnologies
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/hextechnologies
+  api_url: https://boards-api.greenhouse.io/v1/boards/hextechnologies/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: hims-and-hers
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/hims-and-hers
+  api_url: https://api.ashbyhq.com/posting-api/job-board/hims-and-hers?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: netic
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/netic
+  api_url: https://api.ashbyhq.com/posting-api/job-board/netic?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: omadahealth
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/omadahealth
+  api_url: https://boards-api.greenhouse.io/v1/boards/omadahealth/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: pantheon
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/pantheon
+  api_url: https://boards-api.greenhouse.io/v1/boards/pantheon/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: stackadapt
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/stackadapt
+  api_url: https://boards-api.greenhouse.io/v1/boards/stackadapt/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: stellar
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/stellar
+  api_url: https://api.ashbyhq.com/posting-api/job-board/stellar?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: tulip
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/tulip
+  api_url: https://boards-api.greenhouse.io/v1/boards/tulip/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: arlo
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/arlo
+  api_url: https://api.ashbyhq.com/posting-api/job-board/arlo?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: base-power
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/base-power
+  api_url: https://api.ashbyhq.com/posting-api/job-board/base-power?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: braintrust
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/braintrust
+  api_url: https://api.ashbyhq.com/posting-api/job-board/braintrust?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: checkr
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/checkr
+  api_url: https://boards-api.greenhouse.io/v1/boards/checkr/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: cognition
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/cognition
+  api_url: https://api.ashbyhq.com/posting-api/job-board/cognition?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: customerio
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/customerio
+  api_url: https://boards-api.greenhouse.io/v1/boards/customerio/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: ditto
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/ditto
+  api_url: https://api.ashbyhq.com/posting-api/job-board/ditto?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: eightsleep
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/eightsleep
+  api_url: https://api.ashbyhq.com/posting-api/job-board/eightsleep?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: ema
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/ema
+  api_url: https://api.ashbyhq.com/posting-api/job-board/ema?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: exa
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/exa
+  api_url: https://api.ashbyhq.com/posting-api/job-board/exa?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: factory
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/factory
+  api_url: https://api.ashbyhq.com/posting-api/job-board/factory?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: graphcore
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/graphcore
+  api_url: https://boards-api.greenhouse.io/v1/boards/graphcore/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: hackerone
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/hackerone
+  api_url: https://api.ashbyhq.com/posting-api/job-board/hackerone?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: handshake
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/handshake
+  api_url: https://api.ashbyhq.com/posting-api/job-board/handshake?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: heygen
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/heygen
+  api_url: https://boards-api.greenhouse.io/v1/boards/heygen/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: ironcladhq
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/ironcladhq
+  api_url: https://api.ashbyhq.com/posting-api/job-board/ironcladhq?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: kikoff
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/kikoff
+  api_url: https://boards-api.greenhouse.io/v1/boards/kikoff/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: lightfield
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/lightfield
+  api_url: https://api.ashbyhq.com/posting-api/job-board/lightfield?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: maymobility
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/maymobility
+  api_url: https://boards-api.greenhouse.io/v1/boards/maymobility/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: mistral.ai
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/mistral.ai
+  api_url: https://api.ashbyhq.com/posting-api/job-board/mistral.ai?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: onetrust
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/onetrust
+  api_url: https://boards-api.greenhouse.io/v1/boards/onetrust/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: orb
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/orb
+  api_url: https://api.ashbyhq.com/posting-api/job-board/orb?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: profound
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/profound
+  api_url: https://api.ashbyhq.com/posting-api/job-board/profound?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: rain
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/rain
+  api_url: https://api.ashbyhq.com/posting-api/job-board/rain?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: retell-ai
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/retell-ai
+  api_url: https://api.ashbyhq.com/posting-api/job-board/retell-ai?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: rilla
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/rilla
+  api_url: https://api.ashbyhq.com/posting-api/job-board/rilla?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: shepherd
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/shepherd
+  api_url: https://api.ashbyhq.com/posting-api/job-board/shepherd?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: standardbots
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/standardbots
+  api_url: https://api.ashbyhq.com/posting-api/job-board/standardbots?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: webai
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/webai
+  api_url: https://api.ashbyhq.com/posting-api/job-board/webai?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: wispr-flow
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/wispr-flow
+  api_url: https://api.ashbyhq.com/posting-api/job-board/wispr-flow?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: afterquery
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/afterquery
+  api_url: https://api.ashbyhq.com/posting-api/job-board/afterquery?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: airapps
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/airapps
+  api_url: https://api.ashbyhq.com/posting-api/job-board/airapps?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: anyscale
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/anyscale
+  api_url: https://api.ashbyhq.com/posting-api/job-board/anyscale?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: aryahealth.ai
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/aryahealth.ai
+  api_url: https://api.ashbyhq.com/posting-api/job-board/aryahealth.ai?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: assembledhq
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/assembledhq
+  api_url: https://api.ashbyhq.com/posting-api/job-board/assembledhq?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: babylist
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/babylist
+  api_url: https://boards-api.greenhouse.io/v1/boards/babylist/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: betterment
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/betterment
+  api_url: https://boards-api.greenhouse.io/v1/boards/betterment/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: cambridgemobiletelematics
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/cambridgemobiletelematics
+  api_url: https://boards-api.greenhouse.io/v1/boards/cambridgemobiletelematics/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: chaosindustries
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/chaosindustries
+  api_url: https://boards-api.greenhouse.io/v1/boards/chaosindustries/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: character
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/character
+  api_url: https://api.ashbyhq.com/posting-api/job-board/character?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: dept
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/dept
+  api_url: https://boards-api.greenhouse.io/v1/boards/dept/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: doppel
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/doppel
+  api_url: https://api.ashbyhq.com/posting-api/job-board/doppel?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: gigaml
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/gigaml
+  api_url: https://api.ashbyhq.com/posting-api/job-board/gigaml?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: grow-therapy
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/grow-therapy
+  api_url: https://api.ashbyhq.com/posting-api/job-board/grow-therapy?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: happyrobot.ai
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/happyrobot.ai
+  api_url: https://api.ashbyhq.com/posting-api/job-board/happyrobot.ai?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: huntress
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/huntress
+  api_url: https://boards-api.greenhouse.io/v1/boards/huntress/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: impact
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/impact
+  api_url: https://boards-api.greenhouse.io/v1/boards/impact/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: imprint
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/imprint
+  api_url: https://api.ashbyhq.com/posting-api/job-board/imprint?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: invisibletech
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/invisibletech
+  api_url: https://boards-api.greenhouse.io/v1/boards/invisibletech/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: junipersquare
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/junipersquare
+  api_url: https://api.ashbyhq.com/posting-api/job-board/junipersquare?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: koboldmetals
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/koboldmetals
+  api_url: https://boards-api.greenhouse.io/v1/boards/koboldmetals/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: livekit
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/livekit
+  api_url: https://api.ashbyhq.com/posting-api/job-board/livekit?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: marianaminerals
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/marianaminerals
+  api_url: https://api.ashbyhq.com/posting-api/job-board/marianaminerals?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: mavenclinic
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/mavenclinic
+  api_url: https://boards-api.greenhouse.io/v1/boards/mavenclinic/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: mercury
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/mercury
+  api_url: https://boards-api.greenhouse.io/v1/boards/mercury/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: mintlify
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/mintlify
+  api_url: https://api.ashbyhq.com/posting-api/job-board/mintlify?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: oneapp
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/oneapp
+  api_url: https://api.ashbyhq.com/posting-api/job-board/oneapp?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: oura
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/oura
+  api_url: https://boards-api.greenhouse.io/v1/boards/oura/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: owner
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/owner
+  api_url: https://api.ashbyhq.com/posting-api/job-board/owner?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: parafin
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/parafin
+  api_url: https://api.ashbyhq.com/posting-api/job-board/parafin?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: plane
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/plane
+  api_url: https://api.ashbyhq.com/posting-api/job-board/plane?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: plaud
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/plaud
+  api_url: https://api.ashbyhq.com/posting-api/job-board/plaud?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: podium81
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/podium81
+  api_url: https://boards-api.greenhouse.io/v1/boards/podium81/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: reducto
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/reducto
+  api_url: https://api.ashbyhq.com/posting-api/job-board/reducto?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: redwoodmaterials
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/redwoodmaterials
+  api_url: https://boards-api.greenhouse.io/v1/boards/redwoodmaterials/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: rogo
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/rogo
+  api_url: https://api.ashbyhq.com/posting-api/job-board/rogo?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: scopely
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/scopely
+  api_url: https://boards-api.greenhouse.io/v1/boards/scopely/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: slash-financial
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/slash-financial
+  api_url: https://api.ashbyhq.com/posting-api/job-board/slash-financial?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: span
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/span
+  api_url: https://api.ashbyhq.com/posting-api/job-board/span?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: stepful
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/stepful
+  api_url: https://api.ashbyhq.com/posting-api/job-board/stepful?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: truebill
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/truebill
+  api_url: https://boards-api.greenhouse.io/v1/boards/truebill/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: valaratomics
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/valaratomics
+  api_url: https://boards-api.greenhouse.io/v1/boards/valaratomics/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: versemedical
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/versemedical
+  api_url: https://api.ashbyhq.com/posting-api/job-board/versemedical?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: watershed
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/watershed
+  api_url: https://api.ashbyhq.com/posting-api/job-board/watershed?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: workatbackbase
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/workatbackbase
+  api_url: https://boards-api.greenhouse.io/v1/boards/workatbackbase/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: workato
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/workato
+  api_url: https://boards-api.greenhouse.io/v1/boards/workato/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: aloyoga
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/aloyoga
+  api_url: https://boards-api.greenhouse.io/v1/boards/aloyoga/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: ambiencehealthcare
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/ambiencehealthcare
+  api_url: https://api.ashbyhq.com/posting-api/job-board/ambiencehealthcare?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: ambrook
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/ambrook
+  api_url: https://api.ashbyhq.com/posting-api/job-board/ambrook?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: camber
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/camber
+  api_url: https://api.ashbyhq.com/posting-api/job-board/camber?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: candidhealth
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/candidhealth
+  api_url: https://api.ashbyhq.com/posting-api/job-board/candidhealth?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: cantina
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/cantina
+  api_url: https://api.ashbyhq.com/posting-api/job-board/cantina?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: carbon
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/carbon
+  api_url: https://boards-api.greenhouse.io/v1/boards/carbon/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: cloverhealth
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/cloverhealth
+  api_url: https://boards-api.greenhouse.io/v1/boards/cloverhealth/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: convex-dev
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/convex-dev
+  api_url: https://api.ashbyhq.com/posting-api/job-board/convex-dev?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: datavant2
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/datavant2
+  api_url: https://boards-api.greenhouse.io/v1/boards/datavant2/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: distyl
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/distyl
+  api_url: https://api.ashbyhq.com/posting-api/job-board/distyl?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: dyna-robotics
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/dyna-robotics
+  api_url: https://api.ashbyhq.com/posting-api/job-board/dyna-robotics?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: eclinicalsolutions
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/eclinicalsolutions
+  api_url: https://boards-api.greenhouse.io/v1/boards/eclinicalsolutions/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: ellipsislabs
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/ellipsislabs
+  api_url: https://api.ashbyhq.com/posting-api/job-board/ellipsislabs?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: evolutioniq
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/evolutioniq
+  api_url: https://boards-api.greenhouse.io/v1/boards/evolutioniq/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: formlabs
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/formlabs
+  api_url: https://boards-api.greenhouse.io/v1/boards/formlabs/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'
+- name: frontcareers
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/frontcareers
+  api_url: https://api.ashbyhq.com/posting-api/job-board/frontcareers?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: harnessinc
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/harnessinc
+  api_url: https://boards-api.greenhouse.io/v1/boards/harnessinc/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: haydenai
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/haydenai
+  api_url: https://api.ashbyhq.com/posting-api/job-board/haydenai?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: helion
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/helion
+  api_url: https://api.ashbyhq.com/posting-api/job-board/helion?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: helm-ai
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/helm-ai
+  api_url: https://api.ashbyhq.com/posting-api/job-board/helm-ai?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: himarley
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/himarley
+  api_url: https://boards-api.greenhouse.io/v1/boards/himarley/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: intrinsicrobotics
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/intrinsicrobotics
+  api_url: https://boards-api.greenhouse.io/v1/boards/intrinsicrobotics/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: junior
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/junior
+  api_url: https://api.ashbyhq.com/posting-api/job-board/junior?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: kalshi
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/kalshi
+  api_url: https://api.ashbyhq.com/posting-api/job-board/kalshi?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: keepersecurity
+  enabled: true
+  provider: greenhouse
+  careers_url: https://job-boards.greenhouse.io/keepersecurity
+  api_url: https://boards-api.greenhouse.io/v1/boards/keepersecurity/jobs?content=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: legora
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/legora
+  api_url: https://api.ashbyhq.com/posting-api/job-board/legora?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: luminai
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/luminai
+  api_url: https://api.ashbyhq.com/posting-api/job-board/luminai?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: maybern
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/maybern
+  api_url: https://api.ashbyhq.com/posting-api/job-board/maybern?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: unknown
+- name: n1
+  enabled: true
+  provider: ashby
+  careers_url: https://jobs.ashbyhq.com/n1
+  api_url: https://api.ashbyhq.com/posting-api/job-board/n1?includeCompensation=true
+  tags:
+  - harvested
+  sponsorship_policy: 'yes'

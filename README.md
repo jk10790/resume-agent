@@ -117,8 +117,7 @@ make ui
 Then open **http://localhost:3000**.  
 To run them separately: `make api` (port 8000) and `make frontend` (port 3000).
 
-**Alternative UIs:**  
-- Streamlit: `make ui-streamlit` (legacy).  
+**Alternative UI:**  
 - CLI only: see below.
 
 ### Command line
@@ -178,7 +177,6 @@ pytest tests/ -v
 - **Unit / API:** `test_backend_api_integration.py`, `test_workflow_integration.py`, `test_cache_integration.py`, `test_llm_service.py`, `test_memory.py`, etc.
 - **E2E (real APIs):** `test_integration_e2e.py` – needs `GROQ_API_KEY` and optionally Google credentials. Run with:  
   `INTEGRATION_TESTS=true pytest tests/test_integration_e2e.py -v -s`
-- **Streamlit UI:** `test_ui_integration.py` – run with `UI_TESTS=true pytest tests/test_ui_integration.py -v` (requires Playwright: `pip install playwright && playwright install chromium`).
 - **React UI (Playwright):** `test_frontend_playwright.py` – start backend and frontend (`make api`, `make frontend`), then:  
   `UI_TESTS=true pytest tests/test_frontend_playwright.py -v`
 
@@ -186,7 +184,6 @@ pytest tests/ -v
 
 - `make test` – all tests  
 - `make test-integration` – E2E with real APIs  
-- `make test-ui` – Streamlit UI tests  
 - `make test-frontend-playwright` – React Playwright (checks that servers are up)  
 - `make test-backend-api`, `make test-cache`, `make test-workflow` – specific suites  
 
@@ -214,7 +211,6 @@ resume-agent/
 ├── frontend/                # React (Vite) UI
 ├── tests/
 ├── main.py                 # CLI entry
-├── app.py                  # Streamlit (legacy)
 ├── validate_app.py
 ├── requirements.txt
 └── Makefile

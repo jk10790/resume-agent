@@ -46,6 +46,7 @@ function formFromCriteria(criteria = {}) {
     exclude_locations: Array.isArray(criteria.exclude_locations) ? criteria.exclude_locations.join(', ') : '',
     must_have_keywords: Array.isArray(criteria.must_have_keywords) ? criteria.must_have_keywords.join(', ') : '',
     avoid_keywords: Array.isArray(criteria.avoid_keywords) ? criteria.avoid_keywords.join(', ') : '',
+    prefer_visa_sponsorship: Boolean(criteria.prefer_visa_sponsorship),
   }
 }
 
@@ -77,6 +78,7 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
     exclude_locations: '',
     must_have_keywords: '',
     avoid_keywords: '',
+    prefer_visa_sponsorship: false,
   })
 
   const filterIsActive = useMemo(
@@ -152,7 +154,7 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
     try {
       const params = new URLSearchParams({
         inbox_state: state,
-        limit: '50',
+        limit: '100',  // API caps at 100; the catalog now yields well over 50
       })
       if (search.trim()) params.set('search', search.trim())
       const response = await fetch(`/api/discover/roles?${params.toString()}`, { credentials: 'include' })
@@ -178,6 +180,7 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
     exclude_locations: parseCsv(form.exclude_locations),
     must_have_keywords: parseCsv(form.must_have_keywords),
     avoid_keywords: parseCsv(form.avoid_keywords),
+    prefer_visa_sponsorship: Boolean(form.prefer_visa_sponsorship),
     page_size: 20,
   })
 
@@ -199,6 +202,7 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
       exclude_locations: '',
       must_have_keywords: '',
       avoid_keywords: '',
+      prefer_visa_sponsorship: false,
     })
     setError('')
   }
@@ -224,6 +228,7 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
           exclude_locations: parseCsv(form.exclude_locations),
           must_have_keywords: parseCsv(form.must_have_keywords),
           avoid_keywords: parseCsv(form.avoid_keywords),
+          prefer_visa_sponsorship: Boolean(form.prefer_visa_sponsorship),
           page_size: 20,
           refresh: false,
         }),
@@ -693,6 +698,18 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
               placeholder="frontend, onsite"
             />
           </label>
+
+          <label className="discover-field">
+            <span>Visa sponsorship</span>
+            <label className="discover-checkbox-label">
+              <input
+                type="checkbox"
+                checked={Boolean(form.prefer_visa_sponsorship)}
+                onChange={(event) => setForm((prev) => ({ ...prev, prefer_visa_sponsorship: event.target.checked }))}
+              />
+              Prefer roles likely to support sponsorship
+            </label>
+          </label>
         </div>
 
         {error && <div className="discover-inline-error">{error}</div>}
@@ -773,6 +790,7 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
                 <span>{role.remote_mode || 'unknown'}</span>
                 <span>{role.posted_label || 'Date unavailable'}</span>
                 <span>{archetypeLabel(role.archetype)}</span>
+                {role.compensation && <span>{role.compensation}</span>}
                 {Number(role.extraction_confidence || 0) < 0.6 && (
                   <span className="discover-confidence-badge">Low confidence</span>
                 )}

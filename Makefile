@@ -1,6 +1,6 @@
 # Makefile for common tasks
 
-.PHONY: help install test lint format clean setup ui api frontend dev ui-streamlit ui-dev
+.PHONY: help install test lint format clean setup ui api frontend dev
 
 PYTHON ?= $(shell if [ -x "./.venv/bin/python" ]; then printf '%s' "./.venv/bin/python"; else command -v python; fi)
 
@@ -11,7 +11,6 @@ help:
 	@echo "  make api        - Run FastAPI backend only"
 	@echo "  make frontend   - Run React frontend only"
 	@echo "  make stop       - Stop servers on ports 8000 and 3000"
-	@echo "  make ui-streamlit - Run legacy Streamlit UI"
 	@echo "  make test       - Run tests"
 	@echo "  make lint       - Check code quality"
 	@echo "  make format     - Format code"
@@ -29,10 +28,6 @@ test-integration:
 	@echo "Running E2E integration tests (requires INTEGRATION_TESTS=true)"
 	INTEGRATION_TESTS=true pytest tests/test_integration_e2e.py -v -s
 
-test-ui:
-	@echo "Running UI integration tests (requires UI_TESTS=true)"
-	@echo "This will start a Streamlit server and test the UI with Playwright"
-	UI_TESTS=true pytest tests/test_ui_integration.py -v -s
 
 test-frontend-playwright:
 	@echo "Running React UI Playwright tests (requires UI_TESTS=true)"
@@ -76,8 +71,7 @@ test-workflow:
 test-all:
 	pytest -v
 	@echo "\nTo run integration tests: make test-integration"
-	@echo "To run UI tests: make test-ui"
-	@echo "To run React UI tests: make test-frontend-playwright"
+		@echo "To run React UI tests: make test-frontend-playwright"
 
 lint:
 	@echo "Linting with flake8..."
@@ -176,14 +170,6 @@ ui: ## Run FastAPI + React UI (new)
 		echo "   Frontend: tail -f /tmp/resume-agent-frontend.log"; \
 		echo ""; \
 		wait'
-
-ui-streamlit: ## Run legacy Streamlit UI
-	@echo "Starting Resume Agent Web UI (Streamlit - legacy)..."
-	streamlit run app.py
-
-ui-dev: ## Run legacy Streamlit UI in headless mode
-	@echo "Starting Resume Agent Web UI in development mode (Streamlit - legacy)..."
-	streamlit run app.py --server.headless true
 
 api: ## Run FastAPI backend only
 	@echo "Starting FastAPI backend on http://localhost:8000..."

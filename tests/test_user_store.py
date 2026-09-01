@@ -287,7 +287,11 @@ def test_discovered_role_upsert_preserves_dismissed_state():
 
     assert merged["id"] == saved["id"]
     assert merged["inbox_state"] == "dismissed"
-    assert len(merged["source_urls"]) == 2
+    assert set(merged["source_urls"]) == {
+        "https://jobs.example.com/role/123",
+        "https://jobs.example.com/role/123?gh_jid=1",
+        "https://boards.example.com/job/123",
+    }
 
 
 def test_discovered_role_feedback_and_listing_order():
