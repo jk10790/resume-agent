@@ -91,13 +91,39 @@ class LLMService:
             )
             self.model_name = model
 
+        elif self.provider_type == "taut":
+            # taut fronts the real provider, so the upstream key still comes from
+            # that provider's setting; the model ids are litellm-prefixed.
+            api_key = (
+                provider_kwargs.get("api_key")
+                or settings.anthropic_api_key
+                or settings.openai_api_key
+                or settings.groq_api_key
+            )
+            model = model_name or settings.taut_default_model
+            self.provider = create_provider(
+                "taut",
+                api_key=api_key,
+                default_model=model,
+                routing_enabled=settings.taut_routing_enabled,
+                tiers={
+                    "simple": [settings.taut_tier_simple],
+                    "standard": [settings.taut_tier_standard],
+                    "complex": [settings.taut_tier_complex],
+                },
+                temperature=provider_kwargs.get("temperature", settings.anthropic_temperature),
+                max_tokens=provider_kwargs.get("max_tokens", settings.anthropic_max_tokens),
+                timeout=settings.taut_timeout,
+            )
+            self.model_name = model
+
         else:
             from ..utils.exceptions import ConfigError
             raise ConfigError(
                 f"Unknown provider: {provider_type}",
                 config_key="LLM_PROVIDER",
                 fix_instructions=(
-                    f"1. Set LLM_PROVIDER to one of: ollama, groq, openai, anthropic\n"
+                    f"1. Set LLM_PROVIDER to one of: ollama, groq, openai, anthropic, taut\n"
                     f"2. Current value: {provider_type}\n"
                     f"3. Update your .env file with: LLM_PROVIDER=anthropic (or groq/ollama/openai)"
                 )
@@ -218,6 +244,9 @@ class LLMService:
                     "attempts": attempt + 1,
                     "response_length": len(result),
                     "cache_key": cache_key[:8] if cache_key else None,
+                    # Only providers that report usage populate this; the rest
+                    # leave it empty rather than guessing a token count.
+                    **(getattr(self.provider, "last_usage", None) or {}),
                 }
                 
                 logger.info("LLM API call successful", provider=self.provider_type, response_length=len(result))
