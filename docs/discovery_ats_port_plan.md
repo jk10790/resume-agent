@@ -83,3 +83,34 @@ moves people toward a green card.
 
 Recruitee has an adapter shape in the public docs but no board in the catalog
 resolved during testing, so it was left out rather than shipped unverified.
+
+## Driving Discovery From a Claude Session
+
+`resume_agent/agent/mcp_discovery.py` is a stdio MCP server exposing the same
+service the web UI uses. Register it with:
+
+```
+claude mcp add resume-discovery -- /abs/path/to/.venv/bin/python -m resume_agent.agent.mcp_discovery
+```
+
+It resolves the local user from `RESUME_AGENT_USER_EMAIL`, or automatically when
+the database holds exactly one signed-in user. It refuses to guess between
+several, because acting for the wrong user writes to someone else's inbox.
+
+The division of labour is the point. Fetching and filtering ~4,600 postings
+across the catalog costs no tokens and no API spend, and rule-based filters beat
+a model at this: `\bITAR\b` either matches or it does not. What is left — is
+this role worth applying to, given this background — is what the model is for.
+
+So the tools return compact summaries. `discover_list` gives one line per role
+plus its id; only `discover_role` returns a full job description, and only for a
+role that was asked for by id. Reading a whole feed into a conversation would
+cost real money per run and filter worse.
+
+Inbox state (shortlisted, dismissed, opened in Tailor) lives in SQLite, so
+decisions made in a session persist and are visible in the web UI, and a later
+session does not re-triage the same roles.
+
+Note that `mcp_discovery` is separate from `mcp_skills.py`, which is an
+in-process server for the Claude Agent SDK rather than a stdio server a Claude
+Code session can connect to.
