@@ -282,3 +282,21 @@ class StorageError(ResumeAgentError):
         
         super().__init__(message, fix_instructions)
         self.path = path
+
+
+class FitEvaluationUnavailable(ResumeAgentError):
+    """The model never produced a usable fit judgement.
+
+    Raised instead of returning an invented score. A fabricated 5/10 is
+    indistinguishable from a real one once it reaches the UI or the
+    `discovered_roles` row, so callers must be able to tell the two apart.
+    """
+
+    def __init__(self, message: str, fix_instructions: str = None):
+        if not fix_instructions:
+            fix_instructions = (
+                "1. Check the LLM provider settings in .env (LLM_PROVIDER, model id, API key).\n"
+                "2. Look for the underlying provider error in the logs above this one.\n"
+                "3. Retry the evaluation once the provider is reachable."
+            )
+        super().__init__(message, fix_instructions)
