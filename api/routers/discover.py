@@ -13,7 +13,8 @@ from resume_agent.services.discover_roles_service import (
     DiscoverRolesService,
     DiscoverSearchCriteria,
 )
-from resume_agent.services.fit_evaluation_service import FitEvaluationError
+from resume_agent.llm.pipeline import PipelineError
+from resume_agent.services.resume_source import ResumeUnavailable
 from resume_agent.services.llm_service import LLMService
 from resume_agent.storage.user_store import get_user_by_id
 from resume_agent.utils.google_ids import extract_google_doc_id
@@ -255,7 +256,9 @@ async def evaluate_discovered_role_fit(role_id: int, payload: DiscoverEvaluateFi
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Discovered role not found")
-    except FitEvaluationError as exc:
+    except ResumeUnavailable as exc:
+        raise HTTPException(status_code=FIT_ERROR_STATUS.get(exc.code, 500), detail=str(exc))
+    except PipelineError as exc:
         raise HTTPException(status_code=FIT_ERROR_STATUS.get(exc.code, 500), detail=str(exc))
 
 

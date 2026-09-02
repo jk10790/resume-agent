@@ -41,14 +41,14 @@ The handoff is not greenfield. A one-way Discovery → Tailor path is already wi
 | Tailor | `frontend/src/components/TailorResume.jsx:364-376` | seeds `company`, `job_title`, `job_url`, `jd_text`, keeps `discoveryContext` |
 | Tailor | `frontend/src/components/TailorResume.jsx:2295` | "Discovery result loaded" banner |
 | Tailor | `frontend/src/components/TailorResume.jsx:1287` | posts `discovered_role_id` to `/api/tailor-resume` |
-| Workflow | `resume_agent/services/multi_agent_workflow.py:389-394` | links the generated strategy brief back to the discovered role |
+| Workflow | `resume_agent/pipelines/steps.py` (`build_strategy`) | links the generated strategy brief back to the discovered role |
 
 Two facts that make the rest of this design cheap:
 
 - **The stored JD is the real JD.** `discovered_roles.raw_text`
   (`resume_agent/storage/user_store.py:223`) holds the hydrated posting body, and the
   tailoring workflow consumes `request.jd_text` directly
-  (`multi_agent_workflow.py:215`) — it never re-scrapes when text is supplied. So a
+  (`resume_agent/pipelines/steps.py`, `load_resume`) — it never re-scrapes when text is supplied. So a
   discovery result can drive tailoring end-to-end without touching the network again.
 - **A read-only detail endpoint already exists and is unused by the UI.**
   `GET /api/discover/roles/{id}` (`api/routers/discover.py:170`) returns the full row —

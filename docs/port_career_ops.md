@@ -5,7 +5,7 @@ Conclusion
 
   That conclusion comes directly from the code. resume-agent already has the Discover tab, persistent inbox, feedback loop, saved searches, analytics, and Tailor handoff in /
   Users/tina/AI workspace/resume-agent/frontend/src/App.jsx:10, /Users/tina/AI workspace/resume-agent/frontend/src/components/DiscoverRoles.jsx:630, /Users/tina/AI workspace/
-  resume-agent/resume_agent/storage/user_store.py:205, and /Users/tina/AI workspace/resume-agent/resume_agent/services/multi_agent_workflow.py:389. The weak point is only the
+  resume-agent/resume_agent/storage/user_store.py:205, and resume_agent/pipelines/steps.py (build_strategy). The weak point is only the
   provider layer: /Users/tina/AI workspace/resume-agent/resume_agent/services/discover_roles_service.py:147 only builds FirecrawlSearchProvider, and /Users/tina/AI workspace/
   resume-agent/resume_agent/services/discovery/firecrawl_provider.py:12 is a paid search API wrapper. Also, discovery is not using an LLM by default right now because /Users/
   tina/AI workspace/resume-agent/api/routers/discover.py:56 instantiates DiscoverRolesService() with no llm_service.

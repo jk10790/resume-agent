@@ -190,3 +190,29 @@ BS
     assert report.top_driver is not None
     assert report.best_next_fix is not None
     assert report.best_next_fix["issue_id"] in {issue.id for issue in report.issues}
+
+
+def test_vague_wording_issue_carries_no_invented_numbers():
+    """The metrics nudge must not hand the improver a figure to copy.
+
+    Its `suggestion`/`example` text is interpolated verbatim into the improver
+    prompt, ahead of that prompt's own "do not invent numbers" rule. A worked
+    example containing invented figures read as a template, which is how
+    fabricated metrics ("reduced latency by 35%") entered tailored resumes.
+    """
+    import re
+
+    agent = ResumeQualityAgent(DummyLLMService())
+    issues, _count = agent._analyze_metrics(
+        "- Significantly improved performance of the checkout service"
+    )
+
+    vague = [i for i in issues if "Vague wording" in i.issue]
+    assert vague, "expected the vague-wording issue to still be raised"
+    issue = vague[0]
+
+    # The phrase, not just the verb it captured.
+    assert "significantly improved" in issue.issue.lower()
+    assert issue.advisory_only is True
+    assert not getattr(issue, "example", None)
+    assert not re.search(r"\d", issue.suggestion), issue.suggestion

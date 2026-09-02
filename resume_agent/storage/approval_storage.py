@@ -12,19 +12,19 @@ from ..config import settings
 from ..utils.logger import logger
 
 if TYPE_CHECKING:
-    from ..services.resume_workflow import TailorResumeResult
+    from ..pipelines.approval import ApprovedDraft
 
 
 class ApprovalStorage(ABC):
     """Abstract base class for approval storage backends"""
     
     @abstractmethod
-    def store(self, approval_id: str, result: TailorResumeResult) -> None:
+    def store(self, approval_id: str, result: ApprovedDraft) -> None:
         """Store an approval request"""
         pass
     
     @abstractmethod
-    def get(self, approval_id: str) -> Optional[TailorResumeResult]:
+    def get(self, approval_id: str) -> Optional[ApprovedDraft]:
         """Retrieve an approval request"""
         pass
     
@@ -46,7 +46,7 @@ class MemoryApprovalStorage(ApprovalStorage):
         self._storage: Dict[str, Dict[str, Any]] = {}
         self._timeout = timeout_seconds or settings.approval_timeout_seconds
     
-    def store(self, approval_id: str, result: TailorResumeResult) -> None:
+    def store(self, approval_id: str, result: ApprovedDraft) -> None:
         """Store approval with timestamp"""
         self._storage[approval_id] = {
             "result": result,
@@ -55,7 +55,7 @@ class MemoryApprovalStorage(ApprovalStorage):
         }
         logger.debug("Stored approval", approval_id=approval_id, timeout=self._timeout)
     
-    def get(self, approval_id: str) -> Optional[TailorResumeResult]:
+    def get(self, approval_id: str) -> Optional[ApprovedDraft]:
         """Retrieve approval if not expired"""
         if approval_id not in self._storage:
             return None
@@ -89,7 +89,7 @@ class MemoryApprovalStorage(ApprovalStorage):
         
         return len(expired)
     
-    def get_all(self) -> Dict[str, TailorResumeResult]:
+    def get_all(self) -> Dict[str, ApprovedDraft]:
         """Get all non-expired approvals (for debugging/admin)"""
         self.cleanup_expired()
         return {
@@ -112,7 +112,7 @@ class RedisApprovalStorage(ApprovalStorage):
         except Exception as e:
             raise RuntimeError(f"Failed to connect to Redis: {e}")
     
-    def store(self, approval_id: str, result: TailorResumeResult) -> None:
+    def store(self, approval_id: str, result: ApprovedDraft) -> None:
         """Store approval in Redis with expiration"""
         import pickle
         try:
@@ -127,7 +127,7 @@ class RedisApprovalStorage(ApprovalStorage):
             logger.error(f"Failed to store approval in Redis: {e}", exc_info=True)
             raise
     
-    def get(self, approval_id: str) -> Optional[TailorResumeResult]:
+    def get(self, approval_id: str) -> Optional[ApprovedDraft]:
         """Retrieve approval from Redis"""
         import pickle
         try:

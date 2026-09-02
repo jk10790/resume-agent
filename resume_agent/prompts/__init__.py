@@ -1,8 +1,5 @@
-# Prompts package
-from .templates import get_prompt, list_prompts, PROMPT_REGISTRY
+"""Prompts live in `library/` as one Markdown file per task.
 
-__all__ = [
-    "get_prompt",
-    "list_prompts",
-    "PROMPT_REGISTRY",
-]
+Load them through `resume_agent.llm.tasks`, which reads each file's frontmatter
+for the tier, output format and cache policy alongside the prompt text.
+"""

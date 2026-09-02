@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -6,9 +7,8 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 from api.main import app
-from resume_agent.services.resume_workflow import TailorResumeResult, WorkflowStep
 from resume_agent.services.discover_roles_service import DiscoverConfigError
-from resume_agent.services.fit_evaluation_service import FitEvaluationError
+from resume_agent.services.resume_source import ResumeUnavailable
 
 
 def _mock_local_user(_request):
@@ -113,20 +113,48 @@ def test_discover_search_returns_503_when_not_configured(monkeypatch):
 
 
 def test_tailor_resume_request_disables_application_tracking_for_discovery(monkeypatch):
+    """A role reached from Discovery is tracked by Discovery, not twice."""
     client = TestClient(app)
     monkeypatch.setattr("api.main.get_local_user_from_request", _mock_local_user)
     monkeypatch.setattr("api.main.get_google_services_from_request", lambda _request: None)
 
     captured = {}
-    service = Mock()
+    orchestrator = Mock()
+    orchestrator.evaluate_fit.return_value = SimpleNamespace(
+        evaluation=SimpleNamespace(
+            score=7,
+            should_apply=True,
+            confidence=0.8,
+            matching_areas=[],
+            missing_areas=[],
+            recommendations=[],
+            reasoning="",
+        ),
+        usage={},
+        steps=[],
+    )
 
-    def execute(workflow_request, step, result, progress_callback=None):
-        captured["track_application"] = workflow_request.track_application
-        captured["discovered_role_id"] = workflow_request.discovered_role_id
-        return TailorResumeResult(error="stop", current_step=WorkflowStep.ERROR)
+    def tailor(tailor_request, **kwargs):
+        captured["track_application"] = tailor_request.track_application
+        captured["discovered_role_id"] = tailor_request.discovered_role_id
+        return SimpleNamespace(
+            tailored_resume="DRAFT",
+            evaluation=None,
+            strategy_brief=None,
+            strategy_brief_id=None,
+            validation=None,
+            review_bundle=None,
+            ats_score=None,
+            original_resume_text="ORIGINAL",
+            doc_url=None,
+            diff_path=None,
+            application_id=None,
+            usage={},
+            steps=[],
+        )
 
-    service.execute_workflow_step.side_effect = execute
-    monkeypatch.setattr("api.main.MultiAgentWorkflowService", lambda *args, **kwargs: service)
+    orchestrator.tailor.side_effect = tailor
+    monkeypatch.setattr("api.main.ResumeOrchestrator", lambda *args, **kwargs: orchestrator)
 
     response = client.post(
         "/api/tailor-resume",
@@ -140,6 +168,8 @@ def test_tailor_resume_request_disables_application_tracking_for_discovery(monke
     )
 
     assert response.status_code == 200
+    # Drain the SSE stream so the background pipeline actually runs.
+    assert "approval_required" in response.text
     assert captured == {"track_application": False, "discovered_role_id": 99}
 
 
@@ -193,7 +223,7 @@ def test_discover_evaluate_fit_endpoint_maps_error_codes(monkeypatch, code, expe
     monkeypatch.setattr("api.routers.discover.get_google_services_from_request", lambda _request: None)
     monkeypatch.setattr(
         "api.routers.discover._service",
-        lambda: Mock(evaluate_role_fit=Mock(side_effect=FitEvaluationError("nope", code=code))),
+        lambda: Mock(evaluate_role_fit=Mock(side_effect=ResumeUnavailable("nope", code=code))),
     )
 
     response = client.post("/api/discover/roles/12/evaluate-fit", json={})

@@ -21,8 +21,6 @@ __version__ = "1.0.0"
 from .config import settings, RESUME_DOC_ID, GOOGLE_FOLDER_ID
 # OLLAMA_MODEL kept for backward compatibility but deprecated
 from .config import OLLAMA_MODEL
-from .agents.fit_evaluator import evaluate_resume_fit
-from .agents.resume_tailor import tailor_resume_for_job
 from .agents.jd_extractor import extract_clean_jd
 from .services import LLMService
 
@@ -31,8 +29,6 @@ __all__ = [
     "OLLAMA_MODEL",  # Deprecated - use LLMService() instead
     "RESUME_DOC_ID",
     "GOOGLE_FOLDER_ID",
-    "evaluate_resume_fit",
-    "tailor_resume_for_job",
     "extract_clean_jd",
     "LLMService",
 ]

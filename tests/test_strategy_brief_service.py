@@ -7,7 +7,7 @@ from resume_agent.services.strategy_brief_service import StrategyBriefService
 
 def test_build_brief_persists_canonical_jd_text_and_uses_fallbacks():
     llm = Mock()
-    llm.invoke_with_retry.return_value = "{}"
+    llm.run_task.return_value = {}
     service = StrategyBriefService(llm)
 
     brief = service.build_brief(
@@ -58,7 +58,7 @@ def test_build_brief_persists_canonical_jd_text_and_uses_fallbacks():
 
 def test_regenerate_section_updates_requested_section_only():
     llm = Mock()
-    llm.invoke_with_retry.return_value = '{"risk_notes":["Clarify depth in SRE ownership."]}'
+    llm.run_task.return_value = {"risk_notes": ["Clarify depth in SRE ownership."]}
     service = StrategyBriefService(llm)
 
     brief = JobStrategyBrief(
@@ -100,22 +100,7 @@ def test_regenerate_section_updates_requested_section_only():
 
 def test_build_brief_infers_gap_reason_codes_from_llm_output():
     llm = Mock()
-    llm.invoke_with_retry.return_value = """
-    {
-      "archetype": "platform_infrastructure",
-      "target_alignment": "secondary",
-      "role_summary": "Good fit with one location blocker.",
-      "gating_decision": "stop_and_ask",
-      "requirement_evidence": [],
-      "gap_assessments": [
-        {"requirement": "US-only remote role", "severity": "hard_blocker", "mitigation": "Proceed only if relocation is realistic."}
-      ],
-      "positioning_strategy": [],
-      "tailoring_directives": [],
-      "interview_seeds": [],
-      "risk_notes": []
-    }
-    """
+    llm.run_task.return_value = {'archetype': 'platform_infrastructure', 'target_alignment': 'secondary', 'role_summary': 'Good fit with one location blocker.', 'gating_decision': 'stop_and_ask', 'requirement_evidence': [], 'gap_assessments': [{'requirement': 'US-only remote role', 'severity': 'hard_blocker', 'mitigation': 'Proceed only if relocation is realistic.'}], 'positioning_strategy': [], 'tailoring_directives': [], 'interview_seeds': [], 'risk_notes': []}
     service = StrategyBriefService(llm)
 
     brief = service.build_brief(
@@ -162,26 +147,7 @@ def test_build_brief_infers_gap_reason_codes_from_llm_output():
 
 def test_build_brief_sharpens_summary_and_downgrades_vague_matches():
     llm = Mock()
-    llm.invoke_with_retry.return_value = """
-    {
-      "archetype": "platform_infrastructure",
-      "target_alignment": "primary",
-      "role_summary": "This looks promising for platform work.",
-      "gating_decision": "proceed",
-      "requirement_evidence": [
-        {"requirement": "Kubernetes", "status": "matched", "evidence": "Relevant experience", "source_section": ""}
-      ],
-      "gap_assessments": [
-        {"requirement": "Deep Kubernetes operations", "severity": "stretch", "mitigation": "Frame adjacent platform ownership truthfully."}
-      ],
-      "positioning_strategy": [],
-      "tailoring_directives": [
-        {"id": "dir_1", "section": "summary", "action": "Lead with platform engineering depth", "rationale": "Best fit angle", "enabled": true}
-      ],
-      "interview_seeds": [],
-      "risk_notes": []
-    }
-    """
+    llm.run_task.return_value = {'archetype': 'platform_infrastructure', 'target_alignment': 'primary', 'role_summary': 'This looks promising for platform work.', 'gating_decision': 'proceed', 'requirement_evidence': [{'requirement': 'Kubernetes', 'status': 'matched', 'evidence': 'Relevant experience', 'source_section': ''}], 'gap_assessments': [{'requirement': 'Deep Kubernetes operations', 'severity': 'stretch', 'mitigation': 'Frame adjacent platform ownership truthfully.'}], 'positioning_strategy': [], 'tailoring_directives': [{'id': 'dir_1', 'section': 'summary', 'action': 'Lead with platform engineering depth', 'rationale': 'Best fit angle', 'enabled': True}], 'interview_seeds': [], 'risk_notes': []}
     service = StrategyBriefService(llm)
 
     brief = service.build_brief(

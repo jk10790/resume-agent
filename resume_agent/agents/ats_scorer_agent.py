@@ -255,70 +255,21 @@ class ATSScorerAgent:
         keyword_matches: Dict[str, int],
         missing_keywords: List[str]
     ) -> Dict[str, Any]:
-        """Get detailed scoring from LLM"""
-        from langchain_core.messages import SystemMessage, HumanMessage
-        
-        prompt = SystemMessage(content="""You are an ATS SCORER. Your ONLY job is to evaluate how ATS-friendly a resume is.
-
-CRITICAL RULES:
-- Evaluate format/structure (proper sections, clean formatting, ATS-friendly)
-- Evaluate content quality (relevance, clarity, completeness)
-- Be realistic - most resumes score 60-85, not 95+
-- Provide specific recommendations for improvement
-
-Respond with valid JSON only:
-{
-    "format_score": <0-100>,
-    "content_score": <0-100>,
-    "recommendations": ["...", ...]
-}""")
-        
-        summary = f"""Resume length: {len(resume_text)} characters
-Keyword matches: {len(keyword_matches)}/{len(keyword_matches) + len(missing_keywords)}
-Missing keywords: {', '.join(missing_keywords[:10])}{'...' if len(missing_keywords) > 10 else ''}
-
-Job Requirements:
-- Required Skills: {', '.join(analyzed_jd.required_skills[:10])}
-- Technologies: {', '.join(analyzed_jd.technologies_needed[:10])}
-
-Evaluate the resume's ATS-friendliness and provide scores."""
-        
-        human_prompt = HumanMessage(content=f"""Resume (first 2000 chars):
----
-{resume_text[:2000]}
-
-{summary}
-
-Provide format score, content score, and recommendations.""")
-        
-        # Note: retry logic handled by invoke_with_retry, not duplicated here
-        def _score_and_validate():
-            response = self.llm_service.invoke_with_retry([prompt, human_prompt])
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group(0))
-                
-                # Validate using Pydantic model
-                try:
-                    structured_score = ATSScoreStructured.model_validate(data)
-                    logger.info("ATS Scorer Agent: Structured scoring validated with Pydantic")
-                    return structured_score.model_dump()
-                except ValidationError as validation_error:
-                    logger.warning(f"Pydantic validation failed for ATS score, using fallback: {validation_error}")
-                    # Fallback to manual defaults
-                    return {
-                        "format_score": data.get("format_score", 75),
-                        "content_score": data.get("content_score", 75),
-                        "recommendations": data.get("recommendations", [])
-                    }
-            raise ValueError("No JSON found in LLM response")
-        
+        """Score format and content via the declared ats.score task."""
         try:
-            return _score_and_validate()
+            data = self.llm_service.run_task(
+                "ats.score",
+                resume_excerpt=resume_text[:2000],
+                resume_length=len(resume_text),
+                matched_count=len(keyword_matches),
+                total_count=len(keyword_matches) + len(missing_keywords),
+                missing_keywords=", ".join(missing_keywords[:10]) + ("..." if len(missing_keywords) > 10 else ""),
+                required_skills=", ".join(analyzed_jd.required_skills[:10]),
+                technologies=", ".join(analyzed_jd.technologies_needed[:10]),
+            )
+            return ATSScoreStructured.model_validate(data).model_dump()
         except Exception as e:
+            # A missing ATS score degrades the result; it does not invalidate the
+            # tailoring, so this stays a soft failure with a neutral placeholder.
             logger.error(f"Detailed ATS scoring failed: {e}", exc_info=True)
-            return {
-                "format_score": 75,
-                "content_score": 75,
-                "recommendations": []
-            }
+            return {"format_score": 75, "content_score": 75, "recommendations": []}

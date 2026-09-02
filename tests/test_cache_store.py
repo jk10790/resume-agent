@@ -1,6 +1,5 @@
 from resume_agent.storage.cache_store import SQLiteCacheStore
 from resume_agent.utils.agent_cache import AgentCache
-from resume_agent.utils.cache_tailoring import TailoringCache
 
 
 def test_sqlite_cache_store_put_get_and_namespace_delete():
@@ -54,26 +53,3 @@ def test_agent_cache_uses_source_cache_key_for_parsed_resume():
     )
 
 
-def test_tailoring_cache_round_trip():
-    cache = TailoringCache()
-    cache.clear_cache()
-
-    pattern_id = cache.save_pattern(
-        jd_text="Need Python AWS and Docker",
-        jd_requirements={"required_skills": ["Python", "AWS", "Docker"]},
-        tailoring_changes={"experience": "Added AWS bullet"},
-        intensity="medium",
-        quality_score=84,
-    )
-
-    pattern = cache.get_pattern(pattern_id)
-    similar = cache.find_similar_patterns(
-        jd_text="Looking for AWS Python Docker background",
-        jd_requirements={"required_skills": ["Python", "AWS", "Docker"]},
-        min_similarity=0.7,
-    )
-
-    assert pattern is not None
-    assert pattern.quality_score == 84
-    assert similar
-    assert similar[0][0].pattern_id == pattern_id

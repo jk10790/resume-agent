@@ -13,12 +13,13 @@ from unittest.mock import Mock
 import pytest
 
 from resume_agent.agents.fit_evaluator_agent import FitEvaluatorAgent
-from resume_agent.services.fit_evaluation_service import FitEvaluationError, evaluate_fit_for_jd
+from resume_agent.llm.pipeline import PipelineError
 from resume_agent.utils.exceptions import FitEvaluationUnavailable, LLMError
 
 
 def _resume(skills=("Python", "AWS")):
     resume = Mock()
+    resume.raw_text = "Senior Software Engineer\nBuilt services in Python on AWS."
     resume.all_skills = list(skills)
     resume.total_experience_years = 7
     resume.job_titles = ["Senior Software Engineer"]
@@ -41,7 +42,7 @@ def _jd(required=("Python",), preferred=("Kubernetes",)):
 
 def test_unreachable_provider_raises_instead_of_scoring_five():
     llm = Mock()
-    llm.invoke_with_retry = Mock(side_effect=LLMError("Anthropic API failed: 404 not_found_error"))
+    llm.run_task = Mock(side_effect=LLMError("Anthropic API failed: 404 not_found_error"))
     agent = FitEvaluatorAgent(llm)
 
     with pytest.raises(FitEvaluationUnavailable) as excinfo:
@@ -61,14 +62,15 @@ def test_response_without_json_raises_rather_than_defaulting():
 
 def test_a_scored_response_still_comes_through():
     llm = Mock()
-    llm.invoke_with_retry = Mock(
-        return_value=(
-            '{"fit_score": 8, "should_apply": true, "confidence": 0.9, '
-            '"experience_match": "strong", "experience_gap_years": 0, '
-            '"education_match": true, "missing_education": [], '
-            '"strengths": ["Python"], "weaknesses": [], "recommendations": [], '
-            '"matching_areas": ["Python"], "missing_areas": []}'
-        )
+    llm.run_task = Mock(
+        return_value={
+            "fit_score": 8,
+            "should_apply": True,
+            "confidence": 0.9,
+            "recommendations": [],
+            "matching_areas": ["Python"],
+            "missing_areas": [],
+        }
     )
     agent = FitEvaluatorAgent(llm)
 
@@ -79,33 +81,21 @@ def test_a_scored_response_still_comes_through():
     assert evaluation.confidence == 0.9
 
 
-def test_evaluate_fit_for_jd_surfaces_the_failure(monkeypatch):
-    """The shared service both fit endpoints call must raise, so neither returns 200."""
+def test_the_fit_pipeline_surfaces_the_failure(monkeypatch):
+    """The one path both fit endpoints run must raise, so neither returns 200."""
+    from resume_agent.pipelines import FitRequest, ResumeOrchestrator
 
-    class _FailingWorkflow:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def execute_workflow_step(self, _request, step, result):
-            from resume_agent.services.resume_workflow import WorkflowStep
-
-            result.current_step = WorkflowStep.ERROR
-            result.error = "Fit evaluation failed: provider unreachable"
-            return result
-
-    monkeypatch.setattr(
-        "resume_agent.services.multi_agent_workflow.MultiAgentWorkflowService",
-        _FailingWorkflow,
+    orchestrator = ResumeOrchestrator(llm_service=Mock())
+    orchestrator.services._agents["resume_parser"] = Mock(
+        parse=Mock(side_effect=FitEvaluationUnavailable("provider unreachable"))
     )
+    orchestrator.services._agents["jd_analyzer"] = Mock(analyze=Mock(return_value=Mock()))
 
-    with pytest.raises(FitEvaluationError) as excinfo:
-        evaluate_fit_for_jd(
-            jd_text="Job description body",
-            resume_text="Resume body",
-            llm_service=Mock(),
+    with pytest.raises(PipelineError) as excinfo:
+        orchestrator.evaluate_fit(
+            FitRequest(jd_text="Job description body", resume_text="Resume body")
         )
 
-    assert excinfo.value.code == "failed"
     assert "provider unreachable" in str(excinfo.value)
 
 
@@ -119,22 +109,23 @@ def test_discovery_does_not_persist_a_fit_when_evaluation_fails(monkeypatch):
         "get_discovered_role_for_user",
         lambda *_args, **_kwargs: {"id": 1, "raw_text": "Job description body", "canonical_url": "u"},
     )
-    monkeypatch.setattr(
-        "resume_agent.services.fit_evaluation_service.load_resume_text",
-        lambda *_args, **_kwargs: "Resume body",
-    )
-    monkeypatch.setattr(
-        "resume_agent.services.fit_evaluation_service.evaluate_fit_for_jd",
-        Mock(side_effect=FitEvaluationError("provider unreachable", code="failed")),
-    )
-    for writer in ("set_discovered_role_fit_for_user", "record_discovered_role_feedback_for_user"):
+
+    class _FailingOrchestrator:
+        def __init__(self, **_kwargs):
+            pass
+
+        def evaluate_fit(self, _request, **_kwargs):
+            raise PipelineError("provider unreachable", step="evaluate_fit")
+
+    monkeypatch.setattr("resume_agent.pipelines.ResumeOrchestrator", _FailingOrchestrator)
+    for writer in ("save_discovered_role_fit_for_user", "record_discovered_role_feedback_for_user"):
         if hasattr(module, writer):
             monkeypatch.setattr(module, writer, lambda *a, **k: writes.append(a))
 
     service = module.DiscoverRolesService.__new__(module.DiscoverRolesService)
     service.llm_service = Mock()
 
-    with pytest.raises(FitEvaluationError):
+    with pytest.raises(PipelineError):
         service.evaluate_role_fit(1, 1, google_services=("drive", "docs"))
 
     assert writes == []

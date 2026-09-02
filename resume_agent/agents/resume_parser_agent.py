@@ -163,241 +163,36 @@ class ResumeParserAgent:
         return parsed
     
     def _extract_all_structured(self, resume_text: str) -> Dict[str, Any]:
+        """Extract skills, experience and education in one structured call.
+
+        The prompt, its tier and its output format are declared in the task
+        library, not here.
+
+        There is no per-field fallback chain any more. It fired four more LLM
+        calls after a schema failure, and a parse that cannot satisfy the schema
+        after `invoke_structured`'s own retries is a parse that should surface,
+        not one to paper over with partial extractions -- the same reason a
+        failed fit evaluation raises instead of reporting a made-up 5/10.
         """
-        Extract ALL resume information in a SINGLE structured LLM call.
-        This replaces 3+ separate LLM calls with one efficient call.
-        
-        First tries to use the skill_extractor if available for skills,
-        then uses LLM for the rest.
-        """
-        from langchain_core.messages import SystemMessage, HumanMessage
-        
-        # Try to use skill extractor first (if it exists and is more efficient)
-        # For now, we'll use LLM for everything, but this could be optimized
-        # to use skill_extractor for skills and LLM for experience/education
-        
-        prompt = SystemMessage(content="""You are a RESUME PARSER. Extract ALL information from the resume in a SINGLE structured response.
+        parsed_dict = self.llm_service.run_task("resume.parse", resume_text=resume_text)
+        if not isinstance(parsed_dict, dict):
+            raise ValueError("Resume parser did not return a JSON object")
 
-CRITICAL RULES:
-- Extract EXACTLY as written (preserve capitalization)
-- Only extract what is EXPLICITLY mentioned - DO NOT infer or add anything
-- For years of experience: only extract if explicitly stated (e.g., "5 years", "8 years of experience")
-- DO NOT calculate or infer years from dates
-- Extract job titles, companies, and education exactly as written
+        # Defaults for absent sections; the model dropping a key is ordinary,
+        # while returning a non-object is not.
+        parsed_dict.setdefault("skills", {})
+        parsed_dict.setdefault("experience", {})
+        parsed_dict.setdefault("education", [])
 
-Respond with valid JSON only in this EXACT structure:
-{
-    "skills": {
-        "programming_languages": ["Java", "Python", ...],
-        "frameworks": ["Spring Boot", "React", ...],
-        "tools": ["Docker", "Kubernetes", ...],
-        "databases": ["Oracle", "MySQL", ...],
-        "cloud_platforms": ["AWS", "Azure", ...],
-        "testing_tools": ["Selenium", "JUnit", ...],
-        "other_technologies": ["Kafka", "Apache NiFi", ...],
-        "methodologies": ["Agile", "Scrum", ...]
-    },
-    "experience": {
-        "total_years": <number or null if not explicitly stated>,
-        "years_mentioned": ["6 years", "8 years of experience", ...],
-        "job_titles": ["Software Engineer", ...],
-        "companies": ["Company Name 1", ...],
-        "summary": "<brief 2-3 sentence summary of experience>"
-    },
-    "education": [
-        {
-            "degree": "Master of Science",
-            "field": "Data Science",
-            "institution": "Maryville University",
-            "dates": "September 2019 – April 2021"
+        parsed_structured = ParsedResumeStructured.model_validate(parsed_dict)
+        logger.info("Resume Parser Agent: Structured extraction validated")
+        return {
+            "skills": parsed_structured.skills.model_dump(),
+            "experience": parsed_structured.experience.model_dump(),
+            "education": [edu.model_dump() for edu in parsed_structured.education],
         }
-    ]
-}""")
-        
-        human_prompt = HumanMessage(content=f"""Resume:
----
-{resume_text}
 
-Extract ALL information: skills, technologies, tools, experience, job titles, companies, and education. Return as structured JSON.""")
-        
-        # Note: retry logic handled by invoke_structured, not duplicated here
-        def _extract_and_validate():
-            # Use structured output method for better reliability
-            parsed_dict = self.llm_service.invoke_structured([prompt, human_prompt], validation_retries=2)
-            
-            # Validate using Pydantic model (strict validation with automatic defaults)
-            try:
-                parsed_structured = ParsedResumeStructured.model_validate(parsed_dict)
-                logger.info("Resume Parser Agent: Structured extraction successful and validated with Pydantic")
-                
-                # Convert to dict format for backward compatibility
-                return {
-                    "skills": parsed_structured.skills.model_dump(),
-                    "experience": parsed_structured.experience.model_dump(),
-                    "education": [edu.model_dump() for edu in parsed_structured.education]
-                }
-            except ValidationError as validation_error:
-                logger.warning(f"Pydantic validation failed, attempting to fix: {validation_error}")
-                # Try to fix common issues and re-validate
-                if not isinstance(parsed_dict, dict):
-                    raise ValueError("LLM response is not a dictionary")
-                
-                # Ensure basic structure exists
-                parsed_dict.setdefault("skills", {})
-                parsed_dict.setdefault("experience", {})
-                parsed_dict.setdefault("education", [])
-                
-                # Re-validate with fixed structure
-                parsed_structured = ParsedResumeStructured.model_validate(parsed_dict)
-                return {
-                    "skills": parsed_structured.skills.model_dump(),
-                    "experience": parsed_structured.experience.model_dump(),
-                    "education": [edu.model_dump() for edu in parsed_structured.education]
-                }
-        
-        try:
-            return _extract_and_validate()
-            
-        except Exception as e:
-            logger.error(f"Structured extraction failed: {e}, falling back to individual extractions", exc_info=True)
-            # Fallback to old method if structured fails
-            skills_result = self._extract_skills(resume_text)
-            if not isinstance(skills_result, dict):
-                skills_result = {}
-            
-            experience_result = self._extract_experience(resume_text)
-            if not isinstance(experience_result, dict):
-                experience_result = {}
-            
-            education_result = self._extract_education(resume_text)
-            if isinstance(education_result, list):
-                education_list = education_result
-            elif isinstance(education_result, dict):
-                education_list = education_result.get("education", [])
-            else:
-                education_list = []
-            
-            return {
-                "skills": skills_result,
-                "experience": experience_result,
-                "education": education_list
-            }
-    
-    def _extract_skills(self, resume_text: str) -> Dict[str, List[str]]:
-        """Extract skills using LLM with strict instructions"""
-        from langchain_core.messages import SystemMessage, HumanMessage
-        
-        prompt = SystemMessage(content="""You are a RESUME PARSER. Your ONLY job is to extract skills, technologies, and tools that are EXPLICITLY mentioned in the resume.
 
-CRITICAL RULES:
-- Extract EXACTLY as written (preserve capitalization)
-- Only extract what is EXPLICITLY mentioned - DO NOT infer or add anything
-- Include all variations (e.g., "Java 8" and "Java" if both mentioned)
-- Be comprehensive but accurate
-
-Respond with valid JSON only:
-{
-    "programming_languages": ["Java", "Python", ...],
-    "frameworks": ["Spring Boot", "React", ...],
-    "tools": ["Docker", "Kubernetes", ...],
-    "databases": ["Oracle", "MySQL", ...],
-    "cloud_platforms": ["AWS", "Azure", ...],
-    "testing_tools": ["Selenium", "JUnit", ...],
-    "other_technologies": ["Kafka", "Apache NiFi", ...],
-    "methodologies": ["Agile", "Scrum", ...]
-}""")
-        
-        human_prompt = HumanMessage(content=f"""Resume:
----
-{resume_text}
-
-Extract ALL skills, technologies, tools, frameworks, programming languages, databases, cloud platforms, and methodologies that are EXPLICITLY mentioned in this resume. Return them categorized as JSON.""")
-        
-        try:
-            response = self.llm_service.invoke_with_retry([prompt, human_prompt])
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group(0))
-        except Exception as e:
-            logger.error(f"Skill extraction failed: {e}", exc_info=True)
-        
-        return {}
-    
-    def _extract_experience(self, resume_text: str) -> Dict[str, Any]:
-        """Extract experience information"""
-        from langchain_core.messages import SystemMessage, HumanMessage
-        
-        prompt = SystemMessage(content="""You are a RESUME PARSER. Extract experience-related information from the resume.
-
-CRITICAL RULES:
-- Only extract what is EXPLICITLY stated
-- For years of experience: only extract if explicitly stated (e.g., "5 years", "8 years of experience")
-- DO NOT calculate or infer years from dates
-- Extract job titles and companies exactly as written
-
-Respond with valid JSON only:
-{
-    "total_years": <number or null if not explicitly stated>,
-    "years_mentioned": ["6 years", "8 years of experience", ...],
-    "job_titles": ["Software Engineer", ...],
-    "companies": ["Company Name 1", ...],
-    "summary": "<brief 2-3 sentence summary of experience>"
-}""")
-        
-        human_prompt = HumanMessage(content=f"""Resume:
----
-{resume_text}
-
-Extract experience information: years of experience (ONLY if explicitly stated), job titles, companies, and a brief summary.""")
-        
-        try:
-            response = self.llm_service.invoke_with_retry([prompt, human_prompt])
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group(0))
-        except Exception as e:
-            logger.error(f"Experience extraction failed: {e}", exc_info=True)
-        
-        return {"total_years": None, "years_mentioned": [], "job_titles": [], "companies": [], "summary": ""}
-    
-    def _extract_education(self, resume_text: str) -> Dict[str, List[Dict]]:
-        """Extract education information"""
-        from langchain_core.messages import SystemMessage, HumanMessage
-        
-        prompt = SystemMessage(content="""You are a RESUME PARSER. Extract education information from the resume.
-
-CRITICAL RULES:
-- Extract EXACTLY as written - DO NOT change degree names, fields, or institutions
-- Preserve all details exactly
-
-Respond with valid JSON only:
-{
-    "education": [
-        {
-            "degree": "Master of Science",
-            "field": "Data Science",
-            "institution": "Maryville University",
-            "dates": "September 2019 – April 2021"
-        }
-    ]
-}""")
-        
-        human_prompt = HumanMessage(content=f"""Resume:
----
-{resume_text}
-
-Extract education details exactly as written.""")
-        
-        try:
-            response = self.llm_service.invoke_with_retry([prompt, human_prompt])
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group(0))
-        except Exception as e:
-            logger.error(f"Education extraction failed: {e}", exc_info=True)
-        
-        return {"education": []}
-    
     def _extract_certifications(self, resume_text: str) -> List[str]:
         """Extract certifications"""
         # Simple extraction - can be enhanced with LLM if needed

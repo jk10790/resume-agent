@@ -75,21 +75,3 @@ def test_invoke_structured_json(llm_service_and_provider):
     assert result["score"] == 8
 
 
-def test_evaluate_fit_structured(llm_service_and_provider):
-    service, _provider = llm_service_and_provider
-
-    class _T:
-        def format_messages(self, **_kwargs):
-            return [SystemMessage(content="System")]
-
-    with patch("resume_agent.prompts.templates.get_prompt", return_value=_T()):
-        evaluation = service.evaluate_fit_structured(
-            resume_text="Python developer with AWS experience",
-            jd_text="Looking for Python developer with AWS",
-            known_skills=["Python", "AWS"],
-            prompt_version="latest",
-        )
-    assert isinstance(evaluation, FitEvaluation)
-    assert evaluation.score == 8
-    assert evaluation.should_apply is True
-

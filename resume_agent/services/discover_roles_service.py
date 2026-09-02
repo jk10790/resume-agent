@@ -657,11 +657,6 @@ class DiscoverRolesService:
             batch = pending[index:index + 4]
             if index // 4 >= 3:
                 break
-            prompt = SystemMessage(
-                content="""Return valid JSON only as an array with one object per posting.
-Describe the role only. Do not evaluate candidate fit. Do not recommend whether to apply.
-Do not invent company facts. Do not add blockers not grounded in the page text."""
-            )
             items = [
                 {
                     "id": role["canonical_url"],
@@ -672,16 +667,8 @@ Do not invent company facts. Do not add blockers not grounded in the page text."
                 for role in batch
             ]
             try:
-                response = self.llm_service.invoke_with_retry(
-                    [
-                        prompt,
-                        HumanMessage(
-                            content=(
-                                "Return JSON array with keys id, tldr, archetype, seniority, remote_mode, possible_blockers.\n\n"
-                                + json.dumps(items)
-                            )
-                        ),
-                    ]
+                response = self.llm_service.run_task(
+                    "discover.enrich", postings=json.dumps(items)
                 ).strip()
                 match = re.search(r"\[.*\]", response, re.DOTALL)
                 parsed = json.loads(match.group(0)) if match else []
@@ -1078,12 +1065,8 @@ Do not invent company facts. Do not add blockers not grounded in the page text."
         ATS page that blocks a second direct fetch, and re-extracting it could only
         lose detail against text the provider already hydrated.
         """
-        from .fit_evaluation_service import (
-            FitEvaluationError,
-            evaluate_fit_for_jd,
-            load_resume_text,
-            normalize_resume_doc_ids,
-        )
+        from ..pipelines import FitRequest, ResumeOrchestrator, serialize_evaluation
+        from .resume_source import ResumeUnavailable, normalize_doc_ids
 
         role = get_discovered_role_for_user(user_id, role_id)
         if not role:
@@ -1091,24 +1074,27 @@ Do not invent company facts. Do not add blockers not grounded in the page text."
 
         jd_text = (role.get("raw_text") or "").strip()
         if not jd_text:
-            raise FitEvaluationError(
+            raise ResumeUnavailable(
                 "This role has no stored job description text to evaluate. Open the posting instead.",
                 code="no_jd_text",
             )
 
-        doc_ids = normalize_resume_doc_ids([resume_doc_id, preferred_resume_doc_id, settings.resume_doc_id])
-        resume_text = load_resume_text(google_services, doc_ids)
-
-        evaluation = evaluate_fit_for_jd(
-            jd_text=jd_text,
-            resume_text=resume_text,
+        doc_ids = normalize_doc_ids([resume_doc_id, preferred_resume_doc_id, settings.resume_doc_id])
+        outcome = ResumeOrchestrator(
             llm_service=llm_service or self.llm_service,
             google_services=google_services,
-            local_user_id=user_id,
-            job_url=role.get("apply_url") or role.get("canonical_url"),
-            company=role.get("company") or "",
-            job_title=role.get("job_title") or "",
+        ).evaluate_fit(
+            FitRequest(
+                jd_text=jd_text,
+                company=role.get("company") or "",
+                job_title=role.get("job_title") or "",
+                job_url=role.get("apply_url") or role.get("canonical_url"),
+                resume_doc_id=doc_ids[0] if doc_ids else None,
+                local_user_id=user_id,
+                discovered_role_id=role_id,
+            )
         )
+        evaluation = serialize_evaluation(outcome.evaluation)
 
         updated = save_discovered_role_fit_for_user(user_id, role_id, evaluation)
         record_discovered_role_feedback_for_user(user_id, role_id, "fit_evaluated", [], None)
