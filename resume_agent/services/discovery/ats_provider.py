@@ -62,14 +62,22 @@ class ATSAPIProvider:
             stub for stub in stubs if passes_title_gate(stub, criteria, self.catalog.title_guardrails)
         ]
 
-        # Phase 2: fetch detail pages for the providers that need one, capped so
+        # Phase 2: drop what the location filter can already reject from feed
+        # data alone. This runs BEFORE hydration on purpose. The detail-fetch
+        # budget is small (discover_max_hydration_fetches) and shared; spending
+        # it on roles the location filter is about to reject starves the ones
+        # that survive, which then arrive with no body and get discarded for
+        # being too short. Stubs with no location data yet are kept — only
+        # hydration can tell where they are.
+        hydration_candidates = [
+            stub
+            for stub in title_survivors
+            if stub.get("needs_hydration") and passes_location_gate(stub, criteria)
+        ]
+
+        # Phase 3: fetch detail pages for the providers that need one, capped so
         # that a wide catalog cannot fan out into thousands of requests.
-        self._hydrate(
-            self._hydration_order(
-                [stub for stub in title_survivors if stub.get("needs_hydration")],
-                criteria,
-            )
-        )
+        self._hydrate(self._hydration_order(hydration_candidates, criteria))
 
         survivors: list[dict[str, Any]] = []
         for stub in title_survivors:
@@ -719,20 +727,27 @@ _WORK_MODE_TERMS = {"remote", "hybrid", "onsite"}
 _WORK_MODE_RE = re.compile(r"\b(remote|hybrid|onsite|work from home|wfh)\b", re.IGNORECASE)
 
 
-def _matches_include(location: str, include_locations: list[str]) -> bool:
+def _matches_include(location: str, include_locations: list[str], remote_requested: bool = False) -> bool:
     """Whether one location satisfies the include list.
 
     Matching "remote" as a plain substring treats "Portugal, Remote" as a hit,
     which surfaces EU-only roles to a US-only search. So a location that
     qualifies purely on a work-mode word must also name a place that is wanted:
     "US Remote" passes, "Portugal, Remote" does not, bare "Remote" does.
+
+    When remote is one of the requested work modes, a role whose remote scope is
+    in `settings.discover_remote_scope_terms` also passes even though it names
+    none of the wanted places. Naming towns otherwise excluded every remote
+    posting in the catalog — "Remote - United States" contains no town name — so
+    ticking `remote` and typing a home city silently contradicted each other.
+    The scope list is what keeps this from re-admitting EU-only remote work.
     """
     lowered = location.lower()
     specific = [term for term in include_locations if term not in _WORK_MODE_TERMS]
     if any(term in lowered for term in specific):
         return True
     if not any(term in lowered for term in include_locations):
-        return False
+        return remote_requested and _is_acceptable_remote_scope(lowered)
     if not specific:
         # The filter names no place at all, so work mode is the whole request.
         return True
@@ -741,13 +756,54 @@ def _matches_include(location: str, include_locations: list[str]) -> bool:
     if not residue:
         return True
     # Substring either way so "US Remote" still satisfies an "usa" filter.
-    return any(term in residue or residue in term for term in specific)
+    if any(term in residue or residue in term for term in specific):
+        return True
+    return remote_requested and _is_acceptable_remote_scope(lowered)
+
+
+def _is_acceptable_remote_scope(lowered_location: str) -> bool:
+    """A remote posting whose scope is one the search is willing to work in.
+
+    Scope is read off the location string: "Remote - United States" scopes to
+    the US, "Portugal, Remote" to Portugal. A bare "Remote" names no scope and
+    is accepted. Configure the accepted scopes with DISCOVER_REMOTE_SCOPE_TERMS.
+    """
+    if not _WORK_MODE_RE.search(lowered_location):
+        return False
+    residue = re.sub(r"[^a-z]+", " ", _WORK_MODE_RE.sub(" ", lowered_location)).strip()
+    if not residue:
+        return True
+    return any(term in residue for term in settings.discover_remote_scope_terms_list)
+
+
+def passes_location_gate(stub: dict[str, Any], criteria: dict[str, Any]) -> bool:
+    """Whether a stub's own location data already rules it out.
+
+    Used to steer the detail-fetch budget before it is spent. A stub with no
+    location data cannot be judged yet, so it passes here and is decided later
+    in `prefilter_stub` once hydration has (or has not) filled it in.
+    """
+    locations = [item for item in (stub.get("locations") or []) if item]
+    if not locations:
+        candidate = str(stub.get("location") or "").strip()
+        if not candidate:
+            return True
+        locations = [candidate]
+    include_locations = [term.lower() for term in criteria.get("include_locations") or []]
+    exclude_locations = [term.lower() for term in criteria.get("exclude_locations") or []]
+    if not include_locations and not exclude_locations:
+        return True
+    remote_requested = "remote" in set(criteria.get("remote_modes") or [])
+    return bool(
+        _acceptable_locations(locations, include_locations, exclude_locations, remote_requested=remote_requested)
+    )
 
 
 def _acceptable_locations(
     locations: list[str],
     include_locations: list[str],
     exclude_locations: list[str],
+    remote_requested: bool = False,
 ) -> list[str]:
     """Locations that survive the include/exclude rules.
 
@@ -762,7 +818,9 @@ def _acceptable_locations(
     ]
     if include_locations:
         surviving = [
-            candidate for candidate in surviving if _matches_include(candidate, include_locations)
+            candidate
+            for candidate in surviving
+            if _matches_include(candidate, include_locations, remote_requested=remote_requested)
         ]
     return surviving
 
@@ -793,7 +851,9 @@ def prefilter_stub(
     exclude_locations = [term.lower() for term in criteria.get("exclude_locations") or []]
     remote_mode = _infer_remote_mode(stub)
     remote_requested = "remote" in set(criteria.get("remote_modes") or [])
-    surviving_locations = _acceptable_locations(locations, include_locations, exclude_locations)
+    surviving_locations = _acceptable_locations(
+        locations, include_locations, exclude_locations, remote_requested=remote_requested
+    )
     # Only a role with no location data at all gets the benefit of the doubt.
     # A role that does list locations, none of which are wanted, is genuinely
     # out of scope — being remote does not help when the remote scope is a

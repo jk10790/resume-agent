@@ -431,6 +431,19 @@ class DiscoverRolesService:
             return -35
         return -60
 
+    # Ladder codes, mapped to the bands this module reasons about. Companies do
+    # not agree on these — Google L5, Meta E5 and Amazon SDE III all sit around
+    # senior, while an L5 at a smaller shop can mean principal — so this is a
+    # best-effort reading of the common convention, applied only when a title
+    # states no word band. A word ("Staff Software Engineer (L4)") always wins.
+    _LEVEL_CODE_BANDS = [
+        ("principal", [r"\b[lel]7\b", r"\bic6\b", r"\blevel 7\b", r"\b(?:sde|swe|se)\s*(?:v|5)\b"]),
+        ("staff", [r"\b[le]6\b", r"\bic5\b", r"\blevel 6\b", r"\b(?:sde|swe|se)\s*(?:iv|4)\b"]),
+        ("senior", [r"\b[le]5\b", r"\bic4\b", r"\blevel 5\b", r"\b(?:sde|swe|se)\s*(?:iii|3)\b"]),
+        ("mid", [r"\b[le]4\b", r"\bic3\b", r"\blevel 4\b", r"\b(?:sde|swe|se)\s*(?:ii|2)\b"]),
+        ("junior", [r"\b[le][23]\b", r"\bic[12]\b", r"\blevel [23]\b", r"\b(?:sde|swe|se)\s*(?:i|1)\b"]),
+    ]
+
     def _infer_seniority(self, title: str, text: str) -> str:
         haystack = f"{title} {text}".lower()
         patterns = [
@@ -439,12 +452,24 @@ class DiscoverRolesService:
             ("principal", [r"\bprincipal\b", r"\bdistinguished\b"]),
             ("staff", [r"\bstaff\b"]),
             ("senior", [r"\bsenior\b", r"\bsr\.?\b", r"\blead\b"]),
-            ("mid", [r"\bmid\b", r"\bmid-level\b", r"\bii\b", r"\biii\b"]),
+            ("mid", [r"\bmid\b", r"\bmid-level\b"]),
             ("junior", [r"\bjunior\b", r"\bentry\b", r"\bassociate\b", r"\bintern\b"]),
         ]
         for band, band_patterns in patterns:
             if any(re.search(pattern, haystack) for pattern in band_patterns):
                 return band
+
+        # Only the title carries a ladder code reliably. Body text mentions
+        # other roles' levels ("reports to an L6"), so scanning it misreads them.
+        title_only = title.lower()
+        for band, band_patterns in self._LEVEL_CODE_BANDS:
+            if any(re.search(pattern, title_only) for pattern in band_patterns):
+                return band
+        # Bare roman numerals, which used to read as "mid" whatever they meant.
+        if re.search(r"\biii\b", title_only):
+            return "senior"
+        if re.search(r"\bii\b", title_only):
+            return "mid"
         return "unknown"
 
     def _infer_sponsorship_signal(self, role: dict[str, Any]) -> str:

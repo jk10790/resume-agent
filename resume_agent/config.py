@@ -169,6 +169,13 @@ class Settings(BaseSettings):
     discover_max_fetches_per_search: int = Field(20, validation_alias=AliasChoices('DISCOVER_MAX_FETCHES_PER_SEARCH'))
     discover_max_survivors: int = Field(200, validation_alias=AliasChoices('DISCOVER_MAX_SURVIVORS'))
     discover_max_display_results: int = Field(20, validation_alias=AliasChoices('DISCOVER_MAX_DISPLAY_RESULTS'))
+    # Remote scopes a search is willing to work in. A remote posting whose scope
+    # is one of these satisfies an include-location filter that names only towns,
+    # so ticking "remote" and typing a home city stop contradicting each other.
+    discover_remote_scope_terms: str = Field(
+        "united states,usa,us,u.s.,americas,north america,anywhere,global,worldwide",
+        validation_alias=AliasChoices('DISCOVER_REMOTE_SCOPE_TERMS'),
+    )
     discover_min_extracted_text_chars: int = Field(350, validation_alias=AliasChoices('DISCOVER_MIN_EXTRACTED_TEXT_CHARS'))
     discover_role_expansion_version: str = Field("v1", validation_alias=AliasChoices('DISCOVER_ROLE_EXPANSION_VERSION'))
     
@@ -223,6 +230,11 @@ class Settings(BaseSettings):
         """Get resolved memory file path"""
         return resolve_path(self.memory_file, "memory.json")
     
+    @property
+    def discover_remote_scope_terms_list(self) -> list[str]:
+        """Parsed DISCOVER_REMOTE_SCOPE_TERMS, lowercased."""
+        return [term.strip().lower() for term in (self.discover_remote_scope_terms or "").split(",") if term.strip()]
+
     @property
     def resolved_log_file(self) -> Optional[str]:
         """Get resolved log file path"""

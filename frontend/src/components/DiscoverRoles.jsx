@@ -284,7 +284,9 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
     setError('')
   }
 
-  const handleSearch = async () => {
+  // `refresh` bypasses the query cache (6h) *and* the ATS feed cache, so the
+  // same criteria can be re-run instead of replaying the ids from last time.
+  const handleSearch = async ({ refresh = false } = {}) => {
     if (!form.search_intent.trim() && form.role_families.length === 0) {
       setError('Add search intent or at least one role family.')
       return
@@ -307,7 +309,7 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
           avoid_keywords: parseCsv(form.avoid_keywords),
           prefer_visa_sponsorship: Boolean(form.prefer_visa_sponsorship),
           page_size: 20,
-          refresh: false,
+          refresh,
         }),
       })
       const payload = await response.json().catch(() => ({}))
@@ -726,7 +728,16 @@ export default function DiscoverRoles({ isAuthenticated, onOpenInTailor }) {
           <button type="button" className="discover-secondary-button" onClick={clearForm} disabled={searching}>
             Clear
           </button>
-          <button type="button" className="discover-primary-button" onClick={handleSearch} disabled={searching}>
+          <button
+            type="button"
+            className="discover-secondary-button"
+            onClick={() => handleSearch({ refresh: true })}
+            disabled={searching}
+            title="Re-run this search against fresh job feeds instead of the cached result"
+          >
+            Refresh
+          </button>
+          <button type="button" className="discover-primary-button" onClick={() => handleSearch()} disabled={searching}>
             {searching ? 'Searching…' : 'Search roles'}
           </button>
         </div>

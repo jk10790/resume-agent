@@ -8,6 +8,7 @@ from resume_agent.services.discovery.ats_provider import (
     _apply_workday_detail,
     fetch_smartrecruiters_jobs,
     fetch_workday_jobs,
+    passes_location_gate,
     prefilter_stub,
     ATSAPIProvider,
     fetch_ashby_jobs,
@@ -415,3 +416,65 @@ def test_discipline_rules_match_the_opening_not_the_whole_body():
 
     assert prefilter_stub(frontend, _criteria(), guardrails, body) is None
     assert prefilter_stub(backend, _criteria(), guardrails, body) is not None
+
+
+def test_named_towns_no_longer_exclude_every_remote_posting():
+    """Typing a home city used to contradict ticking "remote": "Remote - United
+    States" carries no town name, so the include filter dropped it. With remote
+    requested, an acceptable remote scope satisfies the filter on its own."""
+    guardrails = TitleGuardrails(positive=[], negative=[], seniority_boost=[])
+    criteria = _criteria(include_locations=["ashburn", "bethesda", "rockville", "arlington"])
+
+    for location in ("Remote - United States", "US Remote", "Remote", "Remote, Americas"):
+        stub = _stub(locations=[location], location=location)
+        assert prefilter_stub(stub, criteria, guardrails) is not None, location
+
+    onsite = _stub(locations=["Austin, TX"], location="Austin, TX")
+    assert prefilter_stub(onsite, criteria, guardrails) is None
+
+    named_town = _stub(locations=["Bethesda, MD"], location="Bethesda, MD")
+    assert prefilter_stub(named_town, criteria, guardrails) is not None
+
+
+def test_remote_scope_outside_the_accepted_list_is_still_rejected():
+    """The scope list is what stops this from re-admitting EU-only remote work."""
+    guardrails = TitleGuardrails(positive=[], negative=[], seniority_boost=[])
+    criteria = _criteria(include_locations=["arlington"])
+
+    for location in ("Portugal, Remote", "Remote - India", "Remote (EMEA)"):
+        stub = _stub(locations=[location], location=location)
+        assert prefilter_stub(stub, criteria, guardrails) is None, location
+
+
+def test_remote_scope_only_applies_when_remote_was_requested():
+    guardrails = TitleGuardrails(positive=[], negative=[], seniority_boost=[])
+    criteria = _criteria(include_locations=["arlington"], remote_modes=["onsite"])
+    stub = _stub(locations=["Remote - United States"], location="Remote - United States")
+
+    assert prefilter_stub(stub, criteria, guardrails) is None
+
+
+def test_detail_fetches_skip_roles_the_location_filter_already_rejects():
+    """The fetch budget is small and shared. Spent on roles the location filter
+    is about to drop, the ones that survive arrive with no body and are then
+    discarded for being too short — which is how a wide search returned 4 rows."""
+    catalog = load_source_catalog(str(FIXTURES / "valid_catalog.yml"))
+    provider = ATSAPIProvider(catalog)
+    criteria = _criteria(include_locations=["arlington"])
+
+    wanted = {"title": "Staff Engineer", "locations": ["Arlington, VA"], "needs_hydration": True}
+    elsewhere = {"title": "Staff Engineer", "locations": ["Austin, TX"], "needs_hydration": True}
+    unknown = {"title": "Staff Engineer", "locations": [], "needs_hydration": True}
+
+    assert passes_location_gate(wanted, criteria) is True
+    assert passes_location_gate(elsewhere, criteria) is False
+    # No location data yet: only the detail fetch can say, so it keeps its slot.
+    assert passes_location_gate(unknown, criteria) is True
+
+
+def test_location_gate_is_a_no_op_without_location_filters():
+    catalog = load_source_catalog(str(FIXTURES / "valid_catalog.yml"))
+    ATSAPIProvider(catalog)
+    criteria = _criteria(include_locations=[], exclude_locations=[])
+
+    assert passes_location_gate({"locations": ["Austin, TX"]}, criteria) is True

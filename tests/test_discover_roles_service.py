@@ -253,3 +253,41 @@ def test_open_in_tailor_seed_has_no_fit_before_evaluation():
     seed = service.open_in_tailor(user["id"], role["id"])["discover_seed"]
 
     assert seed["fit_evaluation"] is None
+
+
+def test_ladder_codes_map_onto_seniority_bands():
+    """Companies express the same band differently. A title that states no word
+    band but carries a ladder code should still land somewhere sensible instead
+    of "unknown", which scores as a mismatch against every request."""
+    service = DiscoverRolesService.__new__(DiscoverRolesService)
+
+    assert service._infer_seniority("Software Engineer, IC5", "") == "staff"
+    assert service._infer_seniority("Software Engineer L6", "") == "staff"
+    assert service._infer_seniority("SDE III", "") == "senior"
+    assert service._infer_seniority("Software Engineer (L5)", "") == "senior"
+    assert service._infer_seniority("Software Engineer (L2)", "") == "junior"
+
+
+def test_a_stated_word_band_outranks_a_ladder_code():
+    """"Staff Software Engineer (L4)" is staff at that company, whatever L4
+    means elsewhere — the word is the company telling you the band directly."""
+    service = DiscoverRolesService.__new__(DiscoverRolesService)
+
+    assert service._infer_seniority("Staff Software Engineer (L4)", "") == "staff"
+    assert service._infer_seniority("Principal Engineer (L5)", "") == "principal"
+
+
+def test_roman_numerals_are_not_read_as_mid_level():
+    """III used to fall in the "mid" bucket, which pushed Amazon-style senior
+    titles below a staff search and stamped them with a mismatch blocker."""
+    service = DiscoverRolesService.__new__(DiscoverRolesService)
+
+    assert service._infer_seniority("Software Engineer III", "") == "senior"
+    assert service._infer_seniority("Software Engineer II", "") == "mid"
+
+
+def test_ladder_codes_are_read_from_the_title_only():
+    """Bodies mention other roles' levels ("you will report to an L6")."""
+    service = DiscoverRolesService.__new__(DiscoverRolesService)
+
+    assert service._infer_seniority("Backend Engineer", "You will report to an L6 and partner with IC5s") == "unknown"
