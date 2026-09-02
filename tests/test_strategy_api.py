@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 
 from api.main import app
 from resume_agent.models.agent_models import JobStrategyBrief, StrategyDirective
-from resume_agent.services.resume_workflow import TailorResumeResult
 from resume_agent.models.resume import FitEvaluation
 
 
@@ -17,6 +16,36 @@ def _mock_local_user(_request):
 
 def _mock_no_session(_request):
     return {}
+
+
+
+def _fit_outcome(score: int = 7) -> Mock:
+    """A completed fit evaluation, as the orchestrator hands one back."""
+    return Mock(
+        evaluation=FitEvaluation(
+            score=score,
+            should_apply=True,
+            matching_areas=["Python"],
+            missing_areas=[],
+            recommendations=[],
+            confidence=0.8,
+        ),
+        parsed_resume=Mock(),
+        analyzed_jd=Mock(),
+        profile_context=None,
+        resume_text="ORIGINAL",
+        usage={},
+        steps=[],
+    )
+
+
+def _stub_orchestrator(monkeypatch, **attrs) -> Mock:
+    orchestrator = Mock()
+    orchestrator.evaluate_fit.return_value = attrs.pop("fit", _fit_outcome())
+    for key, value in attrs.items():
+        setattr(orchestrator, key, value)
+    monkeypatch.setattr("api.main.ResumeOrchestrator", lambda *args, **kwargs: orchestrator)
+    return orchestrator
 
 
 def test_job_strategy_evaluate_endpoint(monkeypatch):
@@ -41,22 +70,12 @@ def test_job_strategy_evaluate_endpoint(monkeypatch):
         tailoring_directives=[StrategyDirective(id="dir_1", section="summary", action="Lead with platform work")],
     )
 
-    final_result = TailorResumeResult(
-        strategy_brief=strategy_brief,
-        strategy_brief_id=42,
-        evaluation=FitEvaluation(
-            score=7,
-            should_apply=True,
-            matching_areas=["Python"],
-            missing_areas=[],
-            recommendations=[],
-            confidence=0.8,
+    _stub_orchestrator(
+        monkeypatch,
+        build_strategy=Mock(
+            return_value=Mock(strategy_brief=strategy_brief, strategy_brief_id=42, usage={}, steps=[])
         ),
     )
-
-    service = Mock()
-    service.execute_workflow_step.side_effect = [TailorResumeResult(), TailorResumeResult(), TailorResumeResult(), final_result]
-    monkeypatch.setattr("api.main.MultiAgentWorkflowService", lambda *args, **kwargs: service)
 
     response = client.post(
         "/api/job-strategy/evaluate",
@@ -133,11 +152,11 @@ def test_job_strategy_regenerate_section_endpoint(monkeypatch):
         approval_status="pending",
     )
 
-    service = Mock()
-    service.execute_workflow_step.side_effect = [TailorResumeResult(parsed_resume=Mock(), analyzed_jd=Mock(), evaluation=FitEvaluation(score=6, should_apply=True, matching_areas=[], missing_areas=[], recommendations=[], confidence=0.7))] * 3
-    service.strategy_brief_service.regenerate_section.return_value = regenerated
-    service.strategy_brief_service.persist_brief.return_value = regenerated
-    monkeypatch.setattr("api.main.MultiAgentWorkflowService", lambda *args, **kwargs: service)
+    orchestrator = _stub_orchestrator(monkeypatch)
+    orchestrator.services.agent.return_value = Mock(
+        regenerate_section=Mock(return_value=regenerated),
+        persist_brief=Mock(return_value=regenerated),
+    )
 
     response = client.post(
         "/api/job-strategy/3/regenerate-section",
@@ -195,10 +214,8 @@ def test_job_strategy_duplicate_endpoint(monkeypatch):
         risk_notes=[],
         approval_status="pending",
     )
-    monkeypatch.setattr(
-        "api.main.StrategyBriefService",
-        lambda _llm: Mock(persist_brief=Mock(return_value=duplicated)),
-    )
+    orchestrator = _stub_orchestrator(monkeypatch)
+    orchestrator.services.agent.return_value = Mock(persist_brief=Mock(return_value=duplicated))
 
     response = client.post("/api/job-strategy/3/duplicate")
 
@@ -256,16 +273,11 @@ def test_job_strategy_rebaseline_endpoint(monkeypatch):
         approval_status="pending",
     )
 
-    service = Mock()
-    step_result = TailorResumeResult(
-        parsed_resume=Mock(),
-        analyzed_jd=Mock(),
-        evaluation=FitEvaluation(score=7, should_apply=True, matching_areas=[], missing_areas=[], recommendations=[], confidence=0.8),
+    orchestrator = _stub_orchestrator(monkeypatch)
+    orchestrator.services.agent.return_value = Mock(
+        build_brief=Mock(return_value=rebuilt),
+        persist_brief=Mock(return_value=rebuilt),
     )
-    service.execute_workflow_step.side_effect = [step_result, step_result, step_result]
-    service.strategy_brief_service.build_brief.return_value = rebuilt
-    service.strategy_brief_service.persist_brief.return_value = rebuilt
-    monkeypatch.setattr("api.main.MultiAgentWorkflowService", lambda *args, **kwargs: service)
 
     response = client.post(
         "/api/job-strategy/3/rebaseline",

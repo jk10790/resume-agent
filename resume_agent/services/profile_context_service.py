@@ -37,3 +37,11 @@ class ProfileContextService:
             preferred_resume_doc_id=user.get("preferred_resume_doc_id"),
             preferred_resume_name=user.get("preferred_resume_name"),
         )
+
+
+_service = ProfileContextService()
+
+
+def load_profile_context(user_id: int | None) -> UserProfileContext:
+    """Module-level accessor used by the pipeline steps."""
+    return _service.load(user_id)

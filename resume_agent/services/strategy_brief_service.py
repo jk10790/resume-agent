@@ -68,87 +68,36 @@ class StrategyBriefService:
             f"{item['archetype']} ({item['tier']})" for item in target_preferences
         ) or "None saved"
 
-        prompt = SystemMessage(
-            content="""You are a recruiting strategist for a human-in-the-loop resume tool.
-
-Build a structured strategy brief for one job. The brief must be truthful, grounded, and useful for resume tailoring.
-
-Rules:
-1. Never invent experience or skills.
-2. If evidence is indirect, mark it as status "adjacent", not "matched".
-3. If a requirement is unsupported, add it to gap_assessments with a truthful mitigation.
-4. Tailoring directives must be concrete and section-specific.
-5. Use one archetype from:
-   - software_engineering
-   - platform_infrastructure
-   - data_ml_ai
-   - applied_ai_llmops
-   - product_technical_product
-   - solutions_customer_engineering
-6. If fit_score < 5 or should_apply=false, set gating_decision to "stop_and_ask". Otherwise use "proceed".
-7. Include target_alignment using one of: primary, secondary, adjacent, unranked.
-8. For notable blockers, include a reason_code when possible:
-   stack_mismatch, seniority_mismatch, geo_restriction, onsite_requirement, domain_mismatch, people_management_gap, education_requirement, clearance_requirement.
-
-Return valid JSON only with this shape:
-{
-  "archetype": "...",
-  "target_alignment": "primary|secondary|adjacent|unranked",
-  "role_summary": "...",
-  "gating_decision": "proceed|stop_and_ask",
-  "requirement_evidence": [{"requirement":"...","status":"matched|adjacent|gap","evidence":"...","source_section":"..."}],
-  "gap_assessments": [{"requirement":"...","severity":"hard_blocker|stretch|nice_to_have","mitigation":"...","reason_code":"optional_code"}],
-  "positioning_strategy": ["...", "..."],
-  "tailoring_directives": [{"id":"dir_1","section":"summary|experience|skills|projects","action":"...","rationale":"...","enabled":true}],
-  "interview_seeds": ["...", "..."],
-  "risk_notes": ["...", "..."]
-}"""
+        payload: Dict[str, Any] = self.llm_service.run_task(
+            "strategy.build_brief",
+            company=company or analyzed_jd.company or "Unknown",
+            job_title=job_title or analyzed_jd.job_title or "Unknown",
+            job_url=job_url or "None",
+            fit_score=fit_evaluation.score,
+            should_apply=fit_evaluation.should_apply,
+            confidence=fit_evaluation.confidence,
+            matching_areas=", ".join(fit_evaluation.matching_areas[:8]) or "None",
+            missing_areas=", ".join(fit_evaluation.missing_areas[:8]) or "None",
+            recommendations=", ".join(fit_evaluation.recommendations[:8]) or "None",
+            reasoning=fit_evaluation.reasoning or "None",
+            resume_skills=", ".join(parsed_resume.all_skills[:25]),
+            resume_titles=", ".join(parsed_resume.job_titles[:6]),
+            experience_years=parsed_resume.total_years_experience or "Not explicitly stated",
+            resume_summary=parsed_resume.experience_summary or parsed_resume.summary or "None",
+            required_skills=", ".join(analyzed_jd.required_skills[:20]) or "None",
+            preferred_skills=", ".join(analyzed_jd.preferred_skills[:15]) or "None",
+            responsibilities=", ".join(analyzed_jd.key_responsibilities[:10]) or "None",
+            technologies=", ".join(analyzed_jd.technologies_needed[:15]) or "None",
+            jd_excerpt=analyzed_jd.raw_text[:3500],
+            confirmed_skills=confirmed_skills,
+            confirmed_metrics=confirmed_metrics,
+            confirmed_evidence=confirmed_evidence,
+            target_preferences=target_preferences_summary,
+            detected_archetype=detected_archetype,
         )
-
-        human = HumanMessage(
-            content=f"""Company: {company or analyzed_jd.company or "Unknown"}
-Job title: {job_title or analyzed_jd.job_title or "Unknown"}
-Job URL: {job_url or "None"}
-
-Fit evaluation:
-- Score: {fit_evaluation.score}/10
-- Should apply: {fit_evaluation.should_apply}
-- Confidence: {fit_evaluation.confidence}
-- Matching areas: {", ".join(fit_evaluation.matching_areas[:8]) or "None"}
-- Missing areas: {", ".join(fit_evaluation.missing_areas[:8]) or "None"}
-- Recommendations: {", ".join(fit_evaluation.recommendations[:8]) or "None"}
-- Reasoning: {fit_evaluation.reasoning or "None"}
-
-Resume summary:
-- Skills: {", ".join(parsed_resume.all_skills[:25])}
-- Job titles: {", ".join(parsed_resume.job_titles[:6])}
-- Experience years: {parsed_resume.total_years_experience or "Not explicitly stated"}
-- Summary: {parsed_resume.experience_summary or parsed_resume.summary or "None"}
-
-JD summary:
-- Required skills: {", ".join(analyzed_jd.required_skills[:20]) or "None"}
-- Preferred skills: {", ".join(analyzed_jd.preferred_skills[:15]) or "None"}
-- Responsibilities: {", ".join(analyzed_jd.key_responsibilities[:10]) or "None"}
-- Technologies: {", ".join(analyzed_jd.technologies_needed[:15]) or "None"}
-- Raw JD excerpt:
-{analyzed_jd.raw_text[:3500]}
-
-Confirmed user skills: {confirmed_skills}
-Confirmed user metrics/evidence: {confirmed_metrics}
-Confirmed reusable evidence/story inventory: {confirmed_evidence}
-User target archetypes: {target_preferences_summary}
-Detected role archetype from system heuristics: {detected_archetype}
-"""
-        )
-
-        response = self.llm_service.invoke_with_retry([prompt, human]).strip()
-        match = re.search(r"\{.*\}", response, re.DOTALL)
-        payload: Dict[str, Any]
-        if not match:
-            logger.warning("Strategy brief LLM response missing JSON; using fallback")
+        if not isinstance(payload, dict):
+            logger.warning("Strategy brief response was not an object; using fallback")
             payload = {}
-        else:
-            payload = json.loads(match.group(0))
 
         requirement_evidence = [
             RequirementEvidence(**item)
@@ -329,43 +278,31 @@ Detected role archetype from system heuristics: {detected_archetype}
         }:
             raise ValueError(f"Unsupported strategy section: {section}")
 
-        prompt = SystemMessage(
-            content="""You are updating one section of an existing job strategy brief for a human-in-the-loop resume product.
-
-Rules:
-1. Return valid JSON only.
-2. Update only the requested section.
-3. Keep the content truthful and grounded in the resume/profile/JD.
-4. If support is indirect, use adjacent framing instead of overstating equivalence.
-5. Preserve target_alignment and include blocker reason_code values when the section supports it."""
+        payload = self.llm_service.run_task(
+            "strategy.regenerate_section",
+            section=section,
+            brief_json=brief.model_dump_json(indent=2),
+            fit_score=fit_evaluation.score,
+            should_apply=fit_evaluation.should_apply,
+            matching_areas=", ".join(fit_evaluation.matching_areas[:8]) or "None",
+            missing_areas=", ".join(fit_evaluation.missing_areas[:8]) or "None",
+            resume_skills=", ".join(parsed_resume.all_skills[:25]),
+            resume_titles=", ".join(parsed_resume.job_titles[:8]),
+            required_skills=", ".join(analyzed_jd.required_skills[:20]),
+            preferred_skills=", ".join(analyzed_jd.preferred_skills[:15]),
+            confirmed_metrics=", ".join(
+                record.get("raw", "")
+                for record in (profile_context.confirmed_metric_records if profile_context else [])[:12]
+                if record.get("raw")
+            ) or "None",
+            confirmed_evidence=" | ".join(
+                f"{record.get('kind', 'evidence')}: {record.get('title', '')} - {record.get('content', '')}"
+                for record in (profile_context.confirmed_evidence_records if profile_context else [])[:8]
+                if record.get("title") and record.get("content")
+            ) or "None",
         )
-        human = HumanMessage(
-            content=f"""Requested section: {section}
-
-Existing strategy brief:
-{brief.model_dump_json(indent=2)}
-
-Fit evaluation:
-- Score: {fit_evaluation.score}/10
-- Should apply: {fit_evaluation.should_apply}
-- Matching areas: {", ".join(fit_evaluation.matching_areas[:8]) or "None"}
-- Missing areas: {", ".join(fit_evaluation.missing_areas[:8]) or "None"}
-
-Resume skills: {", ".join(parsed_resume.all_skills[:25])}
-Resume titles: {", ".join(parsed_resume.job_titles[:8])}
-JD required skills: {", ".join(analyzed_jd.required_skills[:20])}
-JD preferred skills: {", ".join(analyzed_jd.preferred_skills[:15])}
-Confirmed metrics/evidence: {", ".join(record.get("raw", "") for record in (profile_context.confirmed_metric_records if profile_context else [])[:12] if record.get("raw")) or "None"}
-Confirmed evidence/story inventory: {" | ".join(f"{record.get('kind', 'evidence')}: {record.get('title', '')} - {record.get('content', '')}" for record in (profile_context.confirmed_evidence_records if profile_context else [])[:8] if record.get('title') and record.get('content')) or "None"}
-
-Return JSON with exactly one top-level key named "{section}". For list sections, return the full regenerated list."""
-        )
-
-        response = self.llm_service.invoke_with_retry([prompt, human]).strip()
-        match = re.search(r"\{.*\}", response, re.DOTALL)
-        if not match:
-            raise ValueError("Section regeneration response did not contain valid JSON")
-        payload = json.loads(match.group(0))
+        if not isinstance(payload, dict):
+            raise ValueError("Section regeneration response was not a JSON object")
         updated = brief.model_copy(deep=True)
         value = payload.get(section)
 

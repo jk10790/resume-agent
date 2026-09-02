@@ -10,8 +10,7 @@ import pytest
 import json
 from unittest.mock import Mock, patch, MagicMock
 from fastapi.testclient import TestClient
-from resume_agent.services.resume_workflow import ResumeWorkflowService, TailorResumeRequest, WorkflowStep
-from resume_agent.utils.cache_tailoring import TailoringCache
+from resume_agent.pipelines import FitRequest, TailorRequest
 
 if not os.getenv("RUN_INTEGRATION_TESTS"):
     pytest.skip("Skipping integration tests (set RUN_INTEGRATION_TESTS=1 to enable).", allow_module_level=True)
@@ -187,81 +186,6 @@ class TestAPIEndpoints:
                     assert data["success"] is True
                     assert "folders" in data
     
-    def test_cache_stats_endpoint(self, api_client):
-        """Test cache statistics endpoint"""
-        with patch('api.main.TailoringCache') as mock_cache_class:
-            mock_cache = Mock()
-            mock_cache.get_cache_stats.return_value = {
-                "total_patterns": 5,
-                "total_uses": 12,
-                "avg_quality_score": 85.5,
-                "oldest_pattern": "2024-01-01T00:00:00",
-                "newest_pattern": "2024-01-15T00:00:00"
-            }
-            mock_cache_class.return_value = mock_cache
-            
-            response = api_client.get("/api/cache/stats")
-            assert response.status_code == 200
-            data = response.json()
-            assert data["success"] is True
-            assert "stats" in data
-            assert data["stats"]["total_patterns"] == 5
-    
-    def test_cache_patterns_endpoint(self, api_client):
-        """Test list cache patterns endpoint"""
-        with patch('api.main.TailoringCache') as mock_cache_class:
-            from resume_agent.utils.cache_tailoring import TailoringPattern
-            from datetime import datetime
-            
-            mock_pattern = TailoringPattern(
-                pattern_id="test123",
-                jd_requirements_hash="abc123",
-                jd_keywords=["Python", "AWS", "Docker"],
-                tailoring_changes={"Experience": "Updated content"},
-                intensity="medium",
-                quality_score=85,
-                created_at=datetime.now().isoformat(),
-                used_count=3,
-                last_used=datetime.now().isoformat()
-            )
-            
-            mock_cache = Mock()
-            mock_cache.get_all_patterns.return_value = [mock_pattern]
-            mock_cache_class.return_value = mock_cache
-            
-            response = api_client.get("/api/cache/patterns")
-            assert response.status_code == 200
-            data = response.json()
-            assert data["success"] is True
-            assert "patterns" in data
-            assert len(data["patterns"]) == 1
-            assert data["patterns"][0]["pattern_id"] == "test123"
-    
-    def test_delete_cache_pattern_endpoint(self, api_client):
-        """Test delete cache pattern endpoint"""
-        with patch('api.main.TailoringCache') as mock_cache_class:
-            mock_cache = Mock()
-            mock_cache.delete_pattern.return_value = True
-            mock_cache_class.return_value = mock_cache
-            
-            response = api_client.delete("/api/cache/patterns/test123")
-            assert response.status_code == 200
-            data = response.json()
-            assert data["success"] is True
-            mock_cache.delete_pattern.assert_called_once_with("test123")
-    
-    def test_clear_cache_endpoint(self, api_client):
-        """Test clear cache endpoint"""
-        with patch('api.main.TailoringCache') as mock_cache_class:
-            mock_cache = Mock()
-            mock_cache_class.return_value = mock_cache
-            
-            response = api_client.delete("/api/cache/clear")
-            assert response.status_code == 200
-            data = response.json()
-            assert data["success"] is True
-            mock_cache.clear_cache.assert_called_once()
-    
     def test_get_resume_content_endpoint(self, api_client):
         """Test get resume content endpoint"""
         with patch('api.main.ResumeWorkflowService') as mock_service_class:
@@ -277,69 +201,23 @@ class TestAPIEndpoints:
                 assert data["resume_content"] == "Resume content here"
 
 
-class TestWorkflowServiceIntegration:
-    """Test workflow service integration"""
-    
-    def test_workflow_request_structure(self):
-        """Test workflow request accepts all new parameters"""
-        request = TailorResumeRequest(
-            company="Test Company",
-            job_title="Senior Engineer",
+class TestPipelineRequests:
+    """The request objects the API builds for the orchestrator."""
+
+    def test_tailor_request_carries_the_tailoring_options(self):
+        request = TailorRequest(
             jd_text="Job description",
-            resume_doc_id="doc123",
-            save_folder_id="folder456",
-            tailoring_intensity="heavy",
-            sections_to_tailor=["Experience", "Skills"],
-            refinement_feedback="Make it more technical"
+            company="Acme",
+            job_title="Engineer",
+            intensity="heavy",
+            preserve_sections=["education"],
         )
-        
-        assert request.resume_doc_id == "doc123"
-        assert request.save_folder_id == "folder456"
-        assert request.tailoring_intensity == "heavy"
-        assert request.sections_to_tailor == ["Experience", "Skills"]
-        assert request.refinement_feedback == "Make it more technical"
-    
-    def test_cache_integration(self, sample_resume_text, sample_jd_text):
-        """Test that caching is integrated into workflow"""
-        from resume_agent.utils.cache_tailoring import TailoringCache
-        import tempfile
-        import os
-        
-        # Use temporary cache file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            temp_cache_file = f.name
-        
-        try:
-            cache = TailoringCache(cache_file=temp_cache_file)
-            
-            # Save a pattern
-            pattern_id = cache.save_pattern(
-                jd_text=sample_jd_text,
-                jd_requirements={"required_skills": ["Python", "AWS"]},
-                tailoring_changes={"Experience": "Updated"},
-                intensity="medium",
-                quality_score=85
-            )
-            
-            assert pattern_id is not None
-            
-            # Find similar patterns
-            similar = cache.find_similar_patterns(
-                sample_jd_text,
-                {"required_skills": ["Python", "AWS"]},
-                min_similarity=0.5
-            )
-            
-            assert len(similar) > 0
-            assert similar[0][0].pattern_id == pattern_id
-            
-            # Get stats
-            stats = cache.get_cache_stats()
-            assert stats["total_patterns"] == 1
-            
-        finally:
-            if os.path.exists(temp_cache_file):
-                os.unlink(temp_cache_file)
+
+        assert request.jd_text == "Job description"
+        assert request.intensity == "heavy"
+        assert request.preserve_sections == ["education"]
+        # Tailoring extends the fit request rather than redeclaring its fields.
+        assert isinstance(request, FitRequest)
 
 
 class TestAPIErrorHandling:

@@ -13,9 +13,7 @@ if TYPE_CHECKING:
 from ..services.llm_service import LLMService
 from ..utils.logger import logger
 from ..storage.memory import load_memory
-from ..prompts.templates import get_prompt
 from ..config import settings
-from ..utils.llm_factory import create_llm_service_with_fallback
 from ..utils.resume_document import parse_resume_document
 from ..utils.resume_parser import parse_resume_sections
 
@@ -29,24 +27,6 @@ class ResumeTailorAgent:
     def __init__(self, llm_service: LLMService, confirmed_skills: Optional[list[str]] = None):
         self.llm_service = llm_service
         self.confirmed_skills = list(confirmed_skills or [])
-        self.critic_llm = create_llm_service_with_fallback(
-            fallback=llm_service,
-            provider=settings.tailoring_critic_provider,
-            model=settings.tailoring_critic_model,
-            temperature=settings.tailoring_critic_temperature,
-            top_p=settings.tailoring_critic_top_p,
-            max_tokens=settings.tailoring_critic_max_tokens,
-            tag="tailor_critic"
-        )
-        self.revision_llm = create_llm_service_with_fallback(
-            fallback=llm_service,
-            provider=settings.tailoring_revision_provider,
-            model=settings.tailoring_revision_model,
-            temperature=settings.tailoring_revision_temperature,
-            top_p=settings.tailoring_revision_top_p,
-            max_tokens=settings.tailoring_revision_max_tokens,
-            tag="tailor_revision"
-        )
     
     def tailor(
         self,
@@ -97,12 +77,17 @@ class ResumeTailorAgent:
         # Add confirmed skills
         if self.confirmed_skills:
             skills_list = ", ".join(self.confirmed_skills)
-            clarifications = f"{clarifications}\n\n✅ USER CONFIRMED SKILLS (you can add these even if not in original resume):\n{skills_list}\n\n⚠️ CRITICAL: ONLY use skills from this list or skills already present in the original resume. DO NOT add skills that are not in this list and not in the original resume."
+            clarifications = (
+                f"{clarifications}\n\nSkills the user has confirmed. These may be used even if they "
+                f"do not appear in the original resume:\n{skills_list}\n\n"
+                "The usable set of skills is exactly this list plus whatever is already in the "
+                "original resume. Nothing outside it."
+            )
         
         # Add refinement feedback if provided
         if refinement_feedback:
             clarifications = (
-                f"{clarifications}\n\n⚠️⚠️⚠️ USER FEEDBACK FOR REFINEMENT - FOLLOW THESE INSTRUCTIONS CAREFULLY ⚠️⚠️⚠️\n"
+                f"{clarifications}\n\nUSER FEEDBACK FOR REFINEMENT:\n"
                 f"{refinement_feedback}\n\n"
                 "This feedback takes priority over general instructions. "
                 "You must preserve all core resume sections from the source resume unless the feedback explicitly asks to remove them."
@@ -116,69 +101,29 @@ class ResumeTailorAgent:
         normalized_preserve_sections = self._normalize_section_names(preserve_sections or [])
         if normalized_preserve_sections:
             clarifications = (
-                f"{clarifications}\n\nNON-NEGOTIABLE SECTION PRESERVATION RULES:\n"
+                f"{clarifications}\n\nSECTION PRESERVATION RULES:\n"
                 + "\n".join(
                     f"- Preserve the {section} section exactly as it appears in the source resume."
                     for section in normalized_preserve_sections
                 )
             )
         
-        # Select prompt based on intensity
-        if intensity in ["light", "medium", "heavy"]:
-            from ..prompts.tailoring_intensity import (
-                RESUME_TAILORING_LIGHT,
-                RESUME_TAILORING_MEDIUM,
-                RESUME_TAILORING_HEAVY
-            )
-            intensity_map = {
-                "light": RESUME_TAILORING_LIGHT,
-                "medium": RESUME_TAILORING_MEDIUM,
-                "heavy": RESUME_TAILORING_HEAVY
-            }
-            prompt_template = intensity_map[intensity]
-        else:
-            # Use versioned prompt template
-            PROMPT_VERSION = getattr(settings, 'resume_tailoring_prompt_version', 'latest')
-            prompt_template = get_prompt("resume_tailoring", PROMPT_VERSION)
-        
-        # Format messages with comprehensive context
-        messages = prompt_template.format_messages(
+        # One task per intensity, each declaring its own tier and cache policy.
+        task_id = f"tailor.{intensity}" if intensity in ("light", "medium", "heavy") else "tailor.medium"
+
+        logger.info("Calling LLM service to tailor resume", task=task_id)
+        draft = self.llm_service.run_task(
+            task_id,
             job_description=analyzed_jd.raw_text,
             resume=original_resume_text,
-            clarifications=clarifications
-        )
-        
-        # Add context as additional system message
-        from langchain_core.messages import SystemMessage
-        context_message = SystemMessage(content=f"""ADDITIONAL CONTEXT FOR TAILORING:
+            clarifications=f"{clarifications}\n\nANALYSIS CONTEXT:\n{context}",
+        ).strip()
 
-{context}
-
-Use this context to make informed tailoring decisions.""")
-        messages.insert(1, context_message)  # Insert after system prompt
-        
-        # Invoke LLM for initial draft
-        logger.info("Calling LLM service to tailor resume")
-        draft = self.llm_service.invoke_with_retry(messages).strip()
-
-        # Optional critique/revise loop for realism
-        if settings.tailoring_enable_critique:
-            critique = self._critique_tailoring(
-                original_resume_text,
-                draft,
-                analyzed_jd.raw_text,
-                clarifications
-            )
-            if critique:
-                revised = self._revise_with_critique(
-                    original_resume_text,
-                    draft,
-                    critique,
-                    analyzed_jd.raw_text,
-                    clarifications
-                )
-                if revised:
-                    draft = revised
+        # The draft is the resume. A critique/revise pass used to run here and
+        # overwrite it, but the critic only ever saw the first 3500 characters
+        # while the reviser rewrote the whole document -- the tail was rewritten
+        # against notes that never covered it. Voice survives by not rewriting
+        # the same text three times; the humanizer is the one remaining pass.
 
         # Clean output
         result = self._clean_resume_output(draft, analyzed_jd.raw_text)
@@ -197,6 +142,36 @@ Use this context to make informed tailoring decisions.""")
         logger.info("Resume Tailor Agent: Tailoring complete", result_length=len(result))
         return result
 
+    def strip_unverified_metrics(self, resume_text: str, metrics: list[str]) -> Optional[str]:
+        """Soften the listed numeric claims, leaving everything else alone.
+
+        The caller supplies the exact strings its deterministic check flagged, so
+        this never has to decide what counts as unverified -- only how to reword
+        the lines carrying them.
+        """
+        if not metrics:
+            return None
+        try:
+            cleaned = self.llm_service.run_task(
+                "quality.strip_metrics",
+                metrics="\n".join(f"- {m}" for m in metrics),
+                resume_text=resume_text,
+            ).strip()
+        except Exception as e:
+            logger.warning(f"Metric removal pass failed: {e}")
+            return None
+
+        cleaned = self._clean_resume_output(cleaned, "")
+        # A collapse here would silently truncate the resume; better to keep the
+        # flagged draft and let validation report it than to ship a stub.
+        if len(cleaned) < len(resume_text) * 0.7:
+            logger.warning(
+                "Metric removal returned a much shorter resume; keeping the draft",
+                before=len(resume_text), after=len(cleaned),
+            )
+            return None
+        return cleaned
+
     def refine_single_entry(
         self,
         current_resume_text: str,
@@ -213,48 +188,15 @@ Use this context to make informed tailoring decisions.""")
             logger.warning("Resume Tailor Agent: Target entry not found for single-entry refinement")
             return None
 
-        from langchain_core.messages import SystemMessage, HumanMessage
-
-        prompt = SystemMessage(content="""You are a precise resume editor.
-
-Rewrite exactly one targeted resume entry based on the user's feedback.
-
-STRICT RULES:
-1. Return ONLY the rewritten entry text, not the full resume
-2. Preserve factual truth from the original resume
-3. Do not add new employers, titles, skills, dates, metrics, or claims
-4. Keep the same entry type:
-   - if the original starts with a bullet marker, keep a bullet marker
-   - if it is a paragraph, keep it as a paragraph
-5. Keep the rewrite concise and human-sounding
-6. Do not output explanations, labels, or markdown fences
-""")
-
-        human_prompt = HumanMessage(content=f"""Job description context:
----
-{analyzed_jd.raw_text[:2500]}
----
-
-Original resume (fact reference):
----
-{original_resume_text[:3500]}
----
-
-Current tailored resume:
----
-{current_resume_text[:4000]}
----
-
-Target section: {target_entry.section_name}
-Target entry to rewrite:
-{target_entry.text}
-
-User feedback:
-{feedback}
-
-Return only the rewritten entry.""")
-
-        rewritten_entry = self.llm_service.invoke_with_retry([prompt, human_prompt]).strip()
+        rewritten_entry = self.llm_service.run_task(
+            "tailor.refine_entry",
+            jd_excerpt=analyzed_jd.raw_text[:2500],
+            original_excerpt=original_resume_text[:3500],
+            current_excerpt=current_resume_text[:4000],
+            section_name=target_entry.section_name,
+            target_entry=target_entry.text,
+            feedback=feedback,
+        ).strip()
         rewritten_entry = self._clean_single_entry_output(rewritten_entry)
         if not rewritten_entry:
             return None
@@ -354,7 +296,7 @@ Return only the rewritten entry.""")
         
         # Fit analysis (concise)
         context_parts.append("\nFIT ANALYSIS:")
-        context_parts.append(f"- Fit Score: {fit_evaluation.score}/10 ({'✅ Good fit' if fit_evaluation.should_apply else '⚠️ Low fit'})")
+        context_parts.append(f"- Fit Score: {fit_evaluation.score}/10 ({'good fit' if fit_evaluation.should_apply else 'low fit'})")
         context_parts.append(f"- Matching: {', '.join(fit_evaluation.matching_areas[:3])}")
         context_parts.append(f"- Missing: {', '.join(fit_evaluation.missing_areas[:3])}")
         
@@ -392,15 +334,9 @@ Return only the rewritten entry.""")
                     rationale = f" ({directive.rationale})" if getattr(directive, "rationale", "") else ""
                     context_parts.append(f"  - [{directive.section}] {directive.action}{rationale}")
 
-            disabled_directives = [
-                directive
-                for directive in getattr(strategy_brief, "tailoring_directives", [])
-                if not getattr(directive, "enabled", True)
-            ]
-            if disabled_directives:
-                context_parts.append("- Disabled Directives (do not apply):")
-                for directive in disabled_directives[:8]:
-                    context_parts.append(f"  - [{directive.section}] {directive.action}")
+            # Directives the user switched off are filtered out here rather than
+            # listed as "do not apply". Naming an instruction in the prompt makes
+            # it likelier to be followed, whatever the surrounding negation says.
 
             gap_assessments = getattr(strategy_brief, "gap_assessments", [])[:6]
             if gap_assessments:
@@ -634,121 +570,3 @@ Return only the rewritten entry.""")
         cleaned = cleaned.removeprefix("Rewritten entry:").strip()
         cleaned = cleaned.removeprefix("Revised entry:").strip()
         return cleaned
-
-    def _critique_tailoring(
-        self,
-        original_resume: str,
-        tailored_resume: str,
-        jd_text: str,
-        clarifications: str
-    ) -> str:
-        """Critique tailored resume for realism and human tone."""
-        from langchain_core.messages import SystemMessage, HumanMessage
-
-        prompt = SystemMessage(content="""You are a RESUME CRITIC.
-
-Focus ONLY on:
-1. Unverified numeric claims or fabricated metrics
-2. Phrases that sound AI-generated or overly templated
-3. Repetition or unnatural cadence in bullet points
-
-Rules:
-- Do NOT propose new skills or new facts
-- Provide concise, actionable revision notes
-- Output a short bullet list only
-""")
-
-        human_prompt = HumanMessage(content=f"""Original Resume (reference for facts):
----
-{original_resume[:2500]}
----
-
-Tailored Draft:
----
-{tailored_resume[:3500]}
----
-
-Supplemental Clarifications:
-{clarifications}
-
-Return critique notes as bullet points only.""")
-
-        try:
-            critique = self.critic_llm.invoke_with_retry([prompt, human_prompt]).strip()
-            # Clean code fences
-            if critique.startswith("```"):
-                lines = critique.split("\n")
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].strip() == "```":
-                    lines = lines[:-1]
-                critique = "\n".join(lines).strip()
-            return critique
-        except Exception as e:
-            logger.warning(f"Critique failed: {e}")
-            return ""
-
-    def _revise_with_critique(
-        self,
-        original_resume: str,
-        tailored_resume: str,
-        critique_notes: str,
-        jd_text: str,
-        clarifications: str
-    ) -> str:
-        """Apply critique notes to revise the tailored resume."""
-        from langchain_core.messages import SystemMessage, HumanMessage
-
-        prompt = SystemMessage(content="""You are a RESUME REVISER.
-
-Apply the critique notes to improve realism and human tone.
-
-STRICT RULES:
-1. Preserve ALL factual content (companies, titles, dates, skills, tools)
-2. DO NOT add new metrics or numbers
-3. If a metric is unverified, soften it to qualitative language
-4. Keep the resume structure and formatting intact
-5. Return ONLY the revised resume text
-""")
-
-        human_prompt = HumanMessage(content=f"""Original Resume (fact reference):
----
-{original_resume[:2500]}
----
-
-Tailored Draft:
----
-{tailored_resume}
----
-
-Critique Notes:
-{critique_notes}
-
-Supplemental Clarifications:
-{clarifications}
-
-Return the revised resume only.""")
-
-        try:
-            revised = self.revision_llm.invoke_with_retry([prompt, human_prompt]).strip()
-
-            if revised.startswith("```"):
-                lines = revised.split("\n")
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].strip() == "```":
-                    lines = lines[:-1]
-                revised = "\n".join(lines).strip()
-
-            if len(revised) < len(tailored_resume) * 0.7:
-                logger.warning(
-                    "Revised resume too short; using draft",
-                    draft_len=len(tailored_resume),
-                    revised_len=len(revised)
-                )
-                return ""
-
-            return revised
-        except Exception as e:
-            logger.warning(f"Revision failed: {e}")
-            return ""

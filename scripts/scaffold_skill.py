@@ -1,92 +1,68 @@
 #!/usr/bin/env python3
-"""Create a new skill dir and stub SKILL.md. Usage: --id <id> --name \"Name\" --description \"When to use.\" [or --from-suggestion <file> --index N]"""
+"""Create a stub task file in the prompt library.
+
+Usage: scaffold_skill.py --id <id> --tier simple|standard|complex --description "When to use."
+
+A task is one Markdown file; there is no manifest to update afterwards. See
+docs/SKILLS.md.
+"""
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SKILLS_DIR = ROOT / "skills"
+LIBRARY = ROOT / "resume_agent" / "prompts" / "library"
+
+TEMPLATE = """---
+id: {task_id}
+tier: {tier}
+description: {description}
+---
+You are a ...
+
+State the task in the imperative. Where the prompt shows a JSON shape, double
+every literal brace ({{{{ and }}}}) -- the body is formatted with the caller's
+variables.
+
+Never illustrate a suggestion with an invented number: a worked example
+containing a figure teaches the model to produce one.
+
+## Human template
+{{input_text}}
+"""
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Scaffold a new resume-agent skill")
-    ap.add_argument("--id", help="Skill id (snake_case, e.g. my_skill)")
-    ap.add_argument("--name", help="Display name")
-    ap.add_argument("--description", help="Short description (when to use)")
-    ap.add_argument("--from-suggestion", dest="suggestion_file", help="Path to suggestion report MD file")
-    ap.add_argument("--index", type=int, default=0, help="Index of proposed skill in suggestion file (default 0)")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--id", required=True, help="Task id, e.g. resume.summarize")
+    parser.add_argument(
+        "--tier",
+        required=True,
+        choices=("simple", "standard", "complex"),
+        help="simple = mechanical extraction; complex = writing or judgement",
+    )
+    parser.add_argument("--description", required=True, help="One line: when to use it")
+    args = parser.parse_args()
 
-    if args.suggestion_file:
-        path = Path(args.suggestion_file)
-        if not path.exists():
-            print(f"File not found: {path}", file=sys.stderr)
-            return 1
-        text = path.read_text(encoding="utf-8")
-        # Heuristic: find JSON block or "id": "..." in the raw response
-        skills_match = re.search(r'"proposed_skills"\s*:\s*\[(.*?)\]', text, re.DOTALL)
-        if not skills_match:
-            print("No proposed_skills array found in suggestion file.", file=sys.stderr)
-            return 1
-        # Parse first few entries; get index-th
-        try:
-            # Reconstruct minimal JSON
-            raw = "{" + skills_match.group(0)
-            if not raw.endswith("}"):
-                raw += "}"
-            data = json.loads(raw)
-            skills = data.get("proposed_skills", [])
-            if args.index >= len(skills):
-                print(f"Index {args.index} out of range (found {len(skills)} skills).", file=sys.stderr)
-                return 1
-            s = skills[args.index]
-            skill_id = s.get("id", "new_skill").replace(" ", "_").lower()
-            name = s.get("name", skill_id)
-            description = s.get("description", "TODO: describe when to use this skill.")
-        except Exception as e:
-            print(f"Could not parse suggestion file: {e}", file=sys.stderr)
-            return 1
-    else:
-        skill_id = (args.id or "").strip().replace(" ", "_").lower()
-        name = (args.name or skill_id or "New Skill").strip()
-        description = (args.description or "TODO: describe when to use this skill.").strip()
-        if not skill_id:
-            print("Provide --id or --from-suggestion.", file=sys.stderr)
-            return 1
-
-    skill_dir = SKILLS_DIR / skill_id
-    if skill_dir.exists():
-        print(f"Skill directory already exists: {skill_dir}", file=sys.stderr)
+    if not re.fullmatch(r"[a-z0-9_]+(\.[a-z0-9_]+)*", args.id):
+        print(f"Invalid task id {args.id!r}: use lowercase words separated by dots", file=sys.stderr)
         return 1
 
-    skill_dir.mkdir(parents=True)
-    skill_md = skill_dir / "SKILL.md"
-    content = f"""---
-name: {skill_id}
-description: {description}
-model_hint: sonnet
----
+    path = LIBRARY / f"{args.id}.md"
+    if path.exists():
+        print(f"{path} already exists", file=sys.stderr)
+        return 1
 
-# {name}
-
-TODO: add instruction body (system prompt and optional ## Human template section with placeholders like {{resume}}, {{job_description}}).
-"""
-    skill_md.write_text(content, encoding="utf-8")
-    print(f"Created {skill_dir}")
-    print(f"  {skill_md}")
-    print("Add this to skills/manifest.json:")
-    print(json.dumps({
-        "id": skill_id,
-        "name": name,
-        "description": description,
-        "instruction_path": f"skills/{skill_id}/SKILL.md",
-        "model_hint": "sonnet",
-    }, indent=2))
+    LIBRARY.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        TEMPLATE.format(task_id=args.id, tier=args.tier, description=args.description)
+    )
+    print(f"Created {path.relative_to(ROOT)}")
+    print(f'Call it with: llm_service.run_task("{args.id}", input_text=...)')
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

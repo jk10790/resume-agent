@@ -7,11 +7,10 @@ import json
 import time
 import hashlib
 from typing import Optional, Dict, Any, List
-from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
+from langchain_core.messages import BaseMessage, SystemMessage
 
 from ..utils.logger import logger
 from ..utils.exceptions import LLMError
-from ..models.resume import FitEvaluation
 from .llm_providers import create_provider, LLMProvider
 from ..storage.cache_store import get_cache_store
 
@@ -129,16 +128,47 @@ class LLMService:
                 )
             )
         
+        # Providers are duck-typed in tests and by any custom implementation, so
+        # check once rather than assuming the tier-aware signature.
+        try:
+            import inspect
+            self._provider_accepts_tier = "tier" in inspect.signature(self.provider.invoke).parameters
+        except (TypeError, ValueError):
+            self._provider_accepts_tier = False
+
         self.cache: Dict[str, str] = {}
         self.cache_size = cache_size
         self.cache_store = get_cache_store()
         self.last_invoke_metadata: Dict[str, Any] = {}
+        # Running totals for this service instance. The taut provider is the only
+        # one that reports usage today; the rest leave these at zero rather than
+        # guessing a token count.
+        self.usage_totals: Dict[str, Any] = {
+            "calls": 0,
+            "cache_hits": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "cost_usd": 0.0,
+            "by_model": {},
+        }
         logger.info(f"Initialized LLM service with provider: {self.provider_type}, model: {self.model_name}")
     
-    def _get_cache_key(self, messages: List[BaseMessage]) -> str:
-        """Generate cache key from messages"""
+    def _get_cache_key(self, messages: List[BaseMessage], tier: Optional[str] = None) -> str:
+        """Generate cache key from messages, resolved model, and sampling params.
+
+        `self.model_name` is not enough on its own: under a routing provider it is
+        the configured default while the call may be served by any tier, so two
+        different models would otherwise share one key.
+        """
         content = "|".join([str(msg.content) for msg in messages])
-        return hashlib.md5(f"{content}:{self.model_name}".encode()).hexdigest()
+        resolve = getattr(self.provider, "resolve_tier_model", None)
+        resolved_model = (resolve(tier) if callable(resolve) else None) or self.model_name
+        sampling = (
+            getattr(self.provider, "temperature", None),
+            getattr(self.provider, "max_tokens", None),
+        )
+        return hashlib.md5(f"{content}:{resolved_model}:{sampling}".encode()).hexdigest()
     
     def _get_from_cache(self, key: str) -> Optional[str]:
         """Get response from cache"""
@@ -164,6 +194,15 @@ class LLMService:
             return persistent["response"]
         return None
     
+    def _cache_expiry(self) -> Optional[str]:
+        """Expiry stamp for persisted responses, or None to keep them forever."""
+        from ..config import settings
+        ttl_hours = getattr(settings, "llm_cache_ttl_hours", 0)
+        if not ttl_hours or ttl_hours <= 0:
+            return None
+        from datetime import datetime, timedelta, timezone
+        return (datetime.now(timezone.utc) + timedelta(hours=ttl_hours)).isoformat()
+
     def _set_cache(self, key: str, value: str, *, persist: bool = True):
         """Store response in cache"""
         if len(self.cache) >= self.cache_size:
@@ -180,15 +219,49 @@ class LLMService:
                 schema_version="llm_response_v1",
                 provider=self.provider_type,
                 model=self.model_name,
+                # Without this these rows never expired. A prompt whose wording
+                # has since changed would otherwise be answered from a response
+                # written against the old one, indefinitely.
+                expires_at=self._cache_expiry(),
             )
         logger.debug("Cached response", cache_key=key[:8])
     
+    def usage_snapshot(self) -> Dict[str, Any]:
+        """Copy of the running totals, safe to diff against a later snapshot."""
+        snapshot = dict(self.usage_totals)
+        snapshot["by_model"] = dict(self.usage_totals.get("by_model", {}))
+        return snapshot
+
+    def _record_usage(self, metadata: Dict[str, Any]) -> None:
+        """Fold one call's reported usage into this service's running totals.
+
+        The taut provider reports per-call tokens and cost -- the reason it was
+        adopted -- but nothing outside the quality agent was reading it, so a
+        tailoring run had no cost attached to it at all.
+        """
+        totals = self.usage_totals
+        totals["calls"] += 1
+        if metadata.get("cache_hit"):
+            totals["cache_hits"] += 1
+            return
+        for field in ("input_tokens", "output_tokens", "cached_tokens"):
+            value = metadata.get(field)
+            if isinstance(value, (int, float)):
+                totals[field] += value
+        cost = metadata.get("cost_usd")
+        if isinstance(cost, (int, float)):
+            totals["cost_usd"] += cost
+        model = metadata.get("routed_model") or metadata.get("model")
+        if model:
+            totals["by_model"][model] = totals["by_model"].get(model, 0) + 1
+
     def invoke_with_retry(
         self,
         messages: List[BaseMessage],
         max_retries: Optional[int] = None,
         retry_delay: Optional[float] = None,
-        use_cache: bool = True
+        use_cache: bool = True,
+        tier: Optional[str] = None
     ) -> str:
         """
         Invoke LLM with automatic retry on failure.
@@ -198,6 +271,8 @@ class LLMService:
             max_retries: Maximum number of retry attempts (uses settings if None)
             retry_delay: Delay between retries in seconds (uses settings if None)
             use_cache: Whether to use caching
+            tier: Cost/capability band for this call ("simple", "standard",
+                "complex"). Providers pinned to one model ignore it.
         
         Returns:
             LLM response text
@@ -215,9 +290,10 @@ class LLMService:
         
         # Check cache
         if use_cache:
-            cache_key = self._get_cache_key(messages)
+            cache_key = self._get_cache_key(messages, tier)
             cached = self._get_from_cache(cache_key)
             if cached:
+                self._record_usage(self.last_invoke_metadata)
                 return cached
         else:
             cache_key = None
@@ -234,7 +310,10 @@ class LLMService:
         for attempt in range(max_retries):
             try:
                 logger.info(f"LLM API call - attempt {attempt + 1}/{max_retries}", provider=self.provider_type, model=self.provider.get_model_name())
-                response = self.provider.invoke(messages)
+                if self._provider_accepts_tier:
+                    response = self.provider.invoke(messages, tier=tier)
+                else:
+                    response = self.provider.invoke(messages)
                 result = response.strip() if hasattr(response, 'strip') else str(response).strip()
                 self.last_invoke_metadata = {
                     "cache_hit": False,
@@ -250,6 +329,7 @@ class LLMService:
                 }
                 
                 logger.info("LLM API call successful", provider=self.provider_type, response_length=len(result))
+                self._record_usage(self.last_invoke_metadata)
                 
                 # Cache successful response
                 if use_cache:
@@ -289,12 +369,29 @@ class LLMService:
             provider=self.provider_type
         )
     
+    def run_task(self, task_id: str, **variables: Any):
+        """Run a registered task by id.
+
+        The task file declares its own tier, cache policy and output format, so
+        no call site names a model or repeats those decisions. Returns a parsed
+        dict for tasks declaring `output: json`, otherwise the response text.
+        """
+        from ..llm.tasks import get_task
+
+        task = get_task(task_id)
+        messages = task.render(**variables)
+        if task.expects_json:
+            return self.invoke_structured(messages, tier=task.tier, use_cache=task.cache)
+        return self.invoke_with_retry(messages, use_cache=task.cache, tier=task.tier)
+
     def invoke_structured(
         self,
         messages: List[BaseMessage],
         output_schema: Optional[Dict[str, Any]] = None,
         max_retries: int = 3,
-        validation_retries: int = 2
+        validation_retries: int = 2,
+        tier: Optional[str] = None,
+        use_cache: bool = True
     ) -> Dict[str, Any]:
         """
         Invoke LLM and parse structured JSON output with retry on validation failures.
@@ -323,7 +420,9 @@ class LLMService:
         for validation_attempt in range(validation_retries + 1):
             try:
                 # Get LLM response (with its own retry logic)
-                response_text = self.invoke_with_retry(messages, max_retries)
+                response_text = self.invoke_with_retry(
+                    messages, max_retries, tier=tier, use_cache=use_cache
+                )
                 
                 # Try to extract JSON from response
                 try:
@@ -392,109 +491,25 @@ class LLMService:
             provider=self.provider_type
         )
     
-    def evaluate_fit_structured(
-        self,
-        resume_text: str,
-        jd_text: str,
-        known_skills: List[str],
-        prompt_version: str = "latest"
-    ) -> FitEvaluation:
-        """
-        Evaluate resume fit with structured output.
-        
-        Args:
-            resume_text: Resume content
-            jd_text: Job description content
-            known_skills: List of user's confirmed skills
-            prompt_version: Prompt version to use
-        
-        Returns:
-            FitEvaluation model
-        """
-        from ..prompts.templates import get_prompt
-        
-        skills_str = ", ".join(known_skills) if known_skills else "None"
-        
-        # Use versioned prompt template
-        try:
-            prompt_template = get_prompt("fit_evaluation", prompt_version)
-            messages = prompt_template.format_messages(
-                job_description=jd_text,
-                resume=resume_text,
-                known_skills=skills_str
-            )
-        except Exception as e:
-            logger.warning("Failed to load prompt template, using fallback", error=e)
-            # Fallback to direct messages
-            from langchain_core.messages import SystemMessage, HumanMessage
-            messages = [
-                SystemMessage(content="""You are a strict job fit evaluator. Respond with JSON:
-{
-    "score": <1-10>,
-    "should_apply": <true/false>,
-    "matching_areas": [],
-    "missing_areas": [],
-    "recommendations": [],
-    "confidence": <0.0-1.0>,
-    "reasoning": ""
-}"""),
-                HumanMessage(content=f"Job: {jd_text}\nResume: {resume_text}\nSkills: {skills_str}")
-            ]
-        
-        try:
-            result = self.invoke_structured(messages, max_retries=3)
-            return FitEvaluation(**result)
-        except Exception as e:
-            logger.error("Failed to get structured fit evaluation", error=e)
-            # Fallback to text parsing
-            text_result = self.invoke_with_retry(messages, max_retries=1, use_cache=False)
-            return self._parse_fit_evaluation_text(text_result)
-    
-    def _parse_fit_evaluation_text(self, text: str) -> FitEvaluation:
-        """Fallback: Parse free-text evaluation"""
-        import re
-        
-        # Extract score
-        score_match = re.search(r'[Ff]it\s+[Ss]core[:\s]+(\d+)', text)
-        score = int(score_match.group(1)) if score_match else 5
-        
-        # Extract should_apply
-        should_apply = "yes" in text.lower() or "should apply" in text.lower()
-        
-        # Extract matching areas (look for sections)
-        matching = []
-        if "matching" in text.lower() or "top matching" in text.lower():
-            # Try to extract list items
-            lines = text.split('\n')
-            in_matching = False
-            for line in lines:
-                if "matching" in line.lower():
-                    in_matching = True
-                    continue
-                if in_matching and (line.strip().startswith('-') or line.strip().startswith('•')):
-                    matching.append(line.strip().lstrip('-•').strip())
-                elif in_matching and line.strip() == "":
-                    break
-        
-        # Similar for missing areas
-        missing = []
-        if "missing" in text.lower():
-            lines = text.split('\n')
-            in_missing = False
-            for line in lines:
-                if "missing" in line.lower():
-                    in_missing = True
-                    continue
-                if in_missing and (line.strip().startswith('-') or line.strip().startswith('•')):
-                    missing.append(line.strip().lstrip('-•').strip())
-                elif in_missing and line.strip() == "":
-                    break
-        
-        return FitEvaluation(
-            score=score,
-            should_apply=should_apply,
-            matching_areas=matching[:5],  # Limit to 5
-            missing_areas=missing[:5],
-            recommendations=[],
-            confidence=0.6  # Lower confidence for parsed results
-        )
+
+_default_llm_service: Optional[LLMService] = None
+
+
+def get_llm_service() -> LLMService:
+    """Shared LLMService configured from settings.
+
+    Constructing one is not free -- the routing provider builds a whole pipeline
+    in its __init__ -- and the per-instance response cache starts empty, so a
+    service built per request threw away both. Call sites needing a specific
+    provider or model still construct their own.
+    """
+    global _default_llm_service
+    if _default_llm_service is None:
+        _default_llm_service = LLMService()
+    return _default_llm_service
+
+
+def reset_llm_service() -> None:
+    """Drop the shared instance (tests, or a settings change at runtime)."""
+    global _default_llm_service
+    _default_llm_service = None

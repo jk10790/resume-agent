@@ -12,8 +12,7 @@ import sys
 import resume_agent
 
 from resume_agent.config import RESUME_DOC_ID, GOOGLE_FOLDER_ID, settings
-from resume_agent.agents.resume_tailor import tailor_resume_for_job
-from resume_agent.agents.fit_evaluator import evaluate_resume_fit
+from resume_agent.pipelines import FitRequest, ResumeOrchestrator, TailorRequest
 from resume_agent.agents.jd_extractor import extract_clean_jd
 from resume_agent.storage.google_docs import read_google_doc, write_to_google_doc
 from resume_agent.storage.google_drive import get_subfolder_id_for_job, copy_doc_to_folder
@@ -76,7 +75,9 @@ def cmd_evaluate(args):
         # Evaluate fit using structured output
         with track_operation("Evaluating fit with AI"):
             logger.info("Evaluating fit")
-            evaluation = evaluate_resume_fit(llm_service, resume_text, jd_text)
+            evaluation = ResumeOrchestrator(llm_service=llm_service).evaluate_fit(
+                FitRequest(jd_text=jd_text, resume_text=resume_text)
+            ).evaluation
         
         # Display results with Rich
         console.print("\n")
@@ -149,7 +150,15 @@ def cmd_tailor(args):
         
         # Tailor resume
         with track_operation("Tailoring resume with AI"):
-            tailored_resume_text = tailor_resume_for_job(resume_text, jd_text, llm_service)
+            tailored_resume_text = ResumeOrchestrator(llm_service=llm_service).tailor(
+                TailorRequest(
+                    jd_text=jd_text,
+                    resume_text=resume_text,
+                    company=company,
+                    job_title=job_title,
+                    track_application=False,
+                )
+            ).tailored_resume
         
         # Save tailored version
         tailored_resume = Resume(
@@ -179,8 +188,10 @@ def cmd_tailor(args):
             fit_score = None
             if args.evaluate_first:
                 console.print("\n[yellow]🎯 Evaluating fit first...[/yellow]")
-                evaluation = evaluate_resume_fit(llm_service, resume_text, jd_text)
-                fit_score = evaluation.score if hasattr(evaluation, 'score') else None
+                evaluation = ResumeOrchestrator(llm_service=llm_service).evaluate_fit(
+                    FitRequest(jd_text=jd_text, resume_text=resume_text)
+                ).evaluation
+                fit_score = getattr(evaluation, "score", None)
             
             app_id = add_application(
                 job_title=job_title,
@@ -229,7 +240,10 @@ def cmd_apply(args):
     print("STEP 1: Evaluating Fit")
     print("="*60)
     logger.info("Evaluating fit")
-    fit_evaluation = evaluate_resume_fit(llm_service, resume_text, jd_text)
+    orchestrator = ResumeOrchestrator(llm_service=llm_service)
+    fit_evaluation = orchestrator.evaluate_fit(
+        FitRequest(jd_text=jd_text, resume_text=resume_text, company=company, job_title=job_title)
+    ).evaluation
     
     # Display structured evaluation
     if hasattr(fit_evaluation, 'to_display_string'):
@@ -249,7 +263,15 @@ def cmd_apply(args):
         RESUME_DOC_ID, subfolder_id, f"{job_title}_Tailored"
     )
     
-    tailored_resume = tailor_resume_for_job(resume_text, jd_text, llm_service)
+    tailored_resume = orchestrator.tailor(
+        TailorRequest(
+            jd_text=jd_text,
+            resume_text=resume_text,
+            company=company,
+            job_title=job_title,
+            track_application=False,
+        )
+    ).tailored_resume
     generate_diff_markdown(resume_text, tailored_resume, job_title, company)
     write_to_google_doc(tailored_doc_id, tailored_resume)
     

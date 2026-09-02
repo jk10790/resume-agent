@@ -55,12 +55,12 @@ Fixes any reported issues (e.g. missing API key, wrong provider name) then re-ru
 
 ## 4. Skills (already in repo)
 
-The repo ships with `skills/manifest.json` and SKILL.md files for extract_jd, tailor_resume, evaluate_fit, improve_quality. No bootstrap needed to use them.
+The repo ships a prompt library at `resume_agent/prompts/library/` -- one Markdown file per LLM task, each declaring its own model tier. No bootstrap needed to use them. See `docs/SKILLS.md`.
 
 **To add or refine skills later:**
 
 - `python scripts/suggest_skills.py` – writes suggestions to `scripts/out/` (does not change files).
-- `python scripts/scaffold_skill.py --id <id> --name "Name" --description "When to use."` – creates a new skill stub; you add its entry to `skills/manifest.json`.
+- Add a task by writing `resume_agent/prompts/library/<id>.md`; nothing else needs updating.
 
 See [docs/SKILLS.md](SKILLS.md).
 

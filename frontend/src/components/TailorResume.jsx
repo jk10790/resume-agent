@@ -140,14 +140,7 @@ function inferPreviewIntent(entryText, reviewBundle, validation) {
 
 function getProgressState(progress, approvalRequired, result) {
   if (!progress) return { mode: 'running', label: '' }
-  if (approvalRequired && result?.approval_stage === 'strategy') {
-    return {
-      mode: 'checkpoint',
-      label: 'Strategy ready for review',
-      detail: 'Step complete. Review the strategy brief below to continue.',
-    }
-  }
-  if (approvalRequired && result?.approval_stage === 'final_resume') {
+  if (approvalRequired) {
     return {
       mode: 'checkpoint',
       label: 'Draft ready for final review',
@@ -1508,8 +1501,12 @@ function TailorResume({
     }))
 
     try {
-      const response = await fetch('/api/update-strategy-brief', {
-        method: 'POST',
+      const briefId = nextBrief?.id
+      if (!briefId) {
+        throw new Error('Strategy brief has no id yet; save it before editing.')
+      }
+      const response = await fetch(`/api/job-strategy/${briefId}`, {
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },

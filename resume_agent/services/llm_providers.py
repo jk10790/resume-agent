@@ -15,11 +15,20 @@ from ..utils.exceptions import LLMError
 
 class LLMProvider(ABC):
     """Abstract base class for LLM providers"""
-    
+
     @abstractmethod
-    def invoke(self, messages: List[BaseMessage]) -> str:
-        """Invoke the LLM with messages and return response"""
+    def invoke(self, messages: List[BaseMessage], tier: Optional[str] = None) -> str:
+        """Invoke the LLM with messages and return response.
+
+        `tier` names the intended cost/capability band ("simple", "standard",
+        "complex"). Providers pinned to one model ignore it; only the routing
+        provider acts on it.
+        """
         pass
+
+    def resolve_tier_model(self, tier: Optional[str]) -> Optional[str]:
+        """Model this provider would use for `tier`, or None when it cannot route."""
+        return None
     
     @abstractmethod
     def get_model_name(self) -> str:
@@ -43,7 +52,7 @@ class OllamaProvider(LLMProvider):
                 fix_instructions="Install with: pip install langchain-ollama"
             )
     
-    def invoke(self, messages: List[BaseMessage]) -> str:
+    def invoke(self, messages: List[BaseMessage], tier: Optional[str] = None) -> str:
         """Invoke Ollama LLM"""
         try:
             response = self.model.invoke(messages)
@@ -91,7 +100,7 @@ class GroqProvider(LLMProvider):
             result.append({"role": role, "content": content})
         return result
     
-    def invoke(self, messages: List[BaseMessage]) -> str:
+    def invoke(self, messages: List[BaseMessage], tier: Optional[str] = None) -> str:
         """Invoke Groq API"""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -195,7 +204,7 @@ class OpenAIProvider(LLMProvider):
             result.append({"role": role, "content": content})
         return result
     
-    def invoke(self, messages: List[BaseMessage]) -> str:
+    def invoke(self, messages: List[BaseMessage], tier: Optional[str] = None) -> str:
         """Invoke OpenAI API"""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -314,7 +323,7 @@ class AnthropicProvider(LLMProvider):
         system = "\n\n".join(system_parts) if system_parts else None
         return system, api_messages
 
-    def invoke(self, messages: List[BaseMessage]) -> str:
+    def invoke(self, messages: List[BaseMessage], tier: Optional[str] = None) -> str:
         """Invoke Anthropic Messages API."""
         system, api_messages = self._messages_to_anthropic(messages)
         if not api_messages:
@@ -436,18 +445,39 @@ class TautProvider(LLMProvider):
             converted.append(Message(role=role, content=content))
         return converted
 
-    def invoke(self, messages: List[BaseMessage]) -> str:
+    def resolve_tier_model(self, tier: Optional[str]) -> Optional[str]:
+        """Map a caller-declared tier onto a configured model id.
+
+        Returns None when the caller named no tier (or an unconfigured one), which
+        is the signal to fall back to taut's own classifier.
+        """
+        if not tier:
+            return None
+        models = self.tiers.get(tier) or []
+        return models[0] if models else None
+
+    def invoke(self, messages: List[BaseMessage], tier: Optional[str] = None) -> str:
         from taut import LLMRequest
 
         taut_messages = self._to_taut_messages(messages)
         if not taut_messages:
             raise LLMError("At least one non-empty message is required", provider="taut")
 
+        # A caller-declared tier wins. taut's classifier scores on length and
+        # keyword hits, and the length factor saturates at 0.3 -- the same value
+        # as the "simple" threshold. That put the revision and fit calls on the
+        # cheap tier by accident, so the call sites that care now say so.
+        # ignore_client_model is false, so an explicit model short-circuits
+        # classification rather than being reclassified.
+        routed_model = self.resolve_tier_model(tier)
+        if routed_model is None and not (self.routing_enabled and self.tiers):
+            routed_model = self.default_model
+
         request = LLMRequest(
             messages=taut_messages,
-            # Leaving model unset is what lets the routing layer classify the
-            # call; with routing off, taut falls back to default_model.
-            model=None if self.routing_enabled and self.tiers else self.default_model,
+            # Left unset only when no tier was declared and routing is on: that
+            # is what lets the classifier pick.
+            model=routed_model,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
         )

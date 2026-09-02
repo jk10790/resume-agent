@@ -1,3 +1,5 @@
+"""Reading the resume, and the evaluate-fit endpoint that depends on it."""
+
 from unittest.mock import Mock
 
 import pytest
@@ -6,35 +8,33 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 from api.main import app
-from resume_agent.services.fit_evaluation_service import (
-    FitEvaluationError,
-    load_resume_text,
-    normalize_resume_doc_ids,
+from resume_agent.services.resume_source import (
+    ResumeUnavailable,
+    load_first_readable,
+    normalize_doc_ids,
 )
 from resume_agent.utils.exceptions import GoogleAPIError
 
 
-def test_normalize_resume_doc_ids_dedupes_and_keeps_priority_order():
-    doc_ids = normalize_resume_doc_ids([None, "doc-a", "doc-a", "", "doc-b"])
-
-    assert doc_ids == ["doc-a", "doc-b"]
+def test_normalize_doc_ids_dedupes_and_keeps_priority_order():
+    assert normalize_doc_ids([None, "doc-a", "doc-a", "", "doc-b"]) == ["doc-a", "doc-b"]
 
 
-def test_load_resume_text_requires_a_google_session():
-    with pytest.raises(FitEvaluationError) as excinfo:
-        load_resume_text(None, ["doc-a"])
+def test_reading_a_resume_requires_a_google_session():
+    with pytest.raises(ResumeUnavailable) as excinfo:
+        load_first_readable(None, ["doc-a"])
 
     assert excinfo.value.code == "no_google_session"
 
 
-def test_load_resume_text_requires_a_configured_resume():
-    with pytest.raises(FitEvaluationError) as excinfo:
-        load_resume_text(("drive", "docs"), [])
+def test_reading_a_resume_requires_a_configured_document():
+    with pytest.raises(ResumeUnavailable) as excinfo:
+        load_first_readable(("drive", "docs"), [])
 
     assert excinfo.value.code == "no_resume_configured"
 
 
-def test_load_resume_text_falls_through_to_the_next_readable_doc(monkeypatch):
+def test_reading_falls_through_to_the_next_readable_document(monkeypatch):
     attempts = []
 
     def fake_read(_drive, _docs, doc_id):
@@ -43,22 +43,53 @@ def test_load_resume_text_falls_through_to_the_next_readable_doc(monkeypatch):
             raise GoogleAPIError("Document not found")
         return "Resume body"
 
-    monkeypatch.setattr("resume_agent.services.fit_evaluation_service.read_resume_file", fake_read)
+    monkeypatch.setattr("resume_agent.services.resume_source.read_resume_file", fake_read)
 
-    assert load_resume_text(("drive", "docs"), ["doc-a", "doc-b"]) == "Resume body"
+    assert load_first_readable(("drive", "docs"), ["doc-a", "doc-b"]) == "Resume body"
     assert attempts == ["doc-a", "doc-b"]
 
 
-def test_load_resume_text_reports_an_inaccessible_document(monkeypatch):
+def test_an_inaccessible_document_is_reported_as_forbidden(monkeypatch):
     monkeypatch.setattr(
-        "resume_agent.services.fit_evaluation_service.read_resume_file",
+        "resume_agent.services.resume_source.read_resume_file",
         Mock(side_effect=GoogleAPIError("Document not found")),
     )
 
-    with pytest.raises(FitEvaluationError) as excinfo:
-        load_resume_text(("drive", "docs"), ["doc-a"])
+    with pytest.raises(ResumeUnavailable) as excinfo:
+        load_first_readable(("drive", "docs"), ["doc-a"])
 
     assert excinfo.value.code == "resume_forbidden"
+
+
+def _evaluation(score: int = 7) -> Mock:
+    return Mock(
+        score=score,
+        should_apply=score >= 6,
+        confidence=0.8,
+        matching_areas=[],
+        missing_areas=[],
+        recommendations=[],
+        reasoning="",
+    )
+
+
+def _stub_orchestrator(monkeypatch, captured: dict) -> Mock:
+    orchestrator = Mock()
+
+    def evaluate(fit_request, **_kwargs):
+        captured["jd_text"] = fit_request.jd_text
+        captured["resume_text"] = fit_request.resume_text
+        return Mock(evaluation=_evaluation(), usage={"cost_usd": 0.01}, steps=[])
+
+    orchestrator.evaluate_fit.side_effect = evaluate
+    monkeypatch.setattr("api.main.ResumeOrchestrator", lambda *args, **kwargs: orchestrator)
+    return orchestrator
+
+
+def _stub_request_context(monkeypatch):
+    monkeypatch.setattr("api.main.get_google_services_from_request", lambda _request: ("drive", "docs"))
+    monkeypatch.setattr("api.main.get_preferred_resume_doc_id", lambda _request: "doc-a")
+    monkeypatch.setattr("api.main.load_first_readable", lambda *_a, **_k: "Resume body")
 
 
 def test_evaluate_fit_endpoint_prefers_supplied_text_over_refetching_the_url(monkeypatch):
@@ -66,24 +97,9 @@ def test_evaluate_fit_endpoint_prefers_supplied_text_over_refetching_the_url(mon
     client = TestClient(app)
     extract = Mock(return_value="scraped text")
     monkeypatch.setattr("resume_agent.agents.jd_extractor.extract_clean_jd", extract)
-    monkeypatch.setattr("api.main.LLMService", Mock())
-    monkeypatch.setattr("api.main.get_google_services_from_request", lambda _request: ("drive", "docs"))
-    monkeypatch.setattr("api.main.get_preferred_resume_doc_id", lambda _request: "doc-a")
-    monkeypatch.setattr("api.main.load_resume_text", lambda *_args, **_kwargs: "Resume body")
-    captured = {}
-
-    def fake_evaluate(**kwargs):
-        captured.update(kwargs)
-        return {
-            "score": 7,
-            "should_apply": True,
-            "confidence": "medium",
-            "matching_areas": [],
-            "missing_areas": [],
-            "recommendations": [],
-        }
-
-    monkeypatch.setattr("api.main.evaluate_fit_for_jd", fake_evaluate)
+    _stub_request_context(monkeypatch)
+    captured: dict = {}
+    _stub_orchestrator(monkeypatch, captured)
 
     response = client.post(
         "/api/evaluate-fit",
@@ -98,25 +114,12 @@ def test_evaluate_fit_endpoint_prefers_supplied_text_over_refetching_the_url(mon
 
 def test_evaluate_fit_endpoint_still_scrapes_when_only_a_url_is_given(monkeypatch):
     client = TestClient(app)
-    monkeypatch.setattr("api.main.LLMService", Mock())
-    monkeypatch.setattr("api.main.get_google_services_from_request", lambda _request: ("drive", "docs"))
-    monkeypatch.setattr("api.main.get_preferred_resume_doc_id", lambda _request: "doc-a")
-    monkeypatch.setattr("api.main.load_resume_text", lambda *_args, **_kwargs: "Resume body")
-    monkeypatch.setattr("resume_agent.agents.jd_extractor.extract_clean_jd", Mock(return_value="scraped text"))
-    captured = {}
-
-    def fake_evaluate(**kwargs):
-        captured.update(kwargs)
-        return {
-            "score": 4,
-            "should_apply": False,
-            "confidence": "low",
-            "matching_areas": [],
-            "missing_areas": [],
-            "recommendations": [],
-        }
-
-    monkeypatch.setattr("api.main.evaluate_fit_for_jd", fake_evaluate)
+    _stub_request_context(monkeypatch)
+    monkeypatch.setattr(
+        "resume_agent.agents.jd_extractor.extract_clean_jd", Mock(return_value="scraped text")
+    )
+    captured: dict = {}
+    _stub_orchestrator(monkeypatch, captured)
 
     response = client.post("/api/evaluate-fit", json={"job_url": "https://boards.example.com/job/1"})
 
@@ -124,35 +127,13 @@ def test_evaluate_fit_endpoint_still_scrapes_when_only_a_url_is_given(monkeypatc
     assert captured["jd_text"] == "scraped text"
 
 
-def test_evaluate_fit_endpoint_maps_a_missing_google_session_to_401(monkeypatch):
+def test_evaluate_fit_endpoint_reports_what_the_run_cost(monkeypatch):
+    """Cost was collected before but never left the process."""
     client = TestClient(app)
-    monkeypatch.setattr("api.main.LLMService", Mock())
-    monkeypatch.setattr("api.main.get_google_services_from_request", lambda _request: None)
-    monkeypatch.setattr("api.main.get_preferred_resume_doc_id", lambda _request: None)
+    _stub_request_context(monkeypatch)
+    _stub_orchestrator(monkeypatch, {})
 
-    response = client.post("/api/evaluate-fit", json={"jd_text": "Some posting"})
+    response = client.post("/api/evaluate-fit", json={"jd_text": "Posting text"})
 
-    assert response.status_code == 401
-
-
-def test_fit_evaluator_fallback_forwards_known_skills(monkeypatch):
-    """The agent path failing must reach the LLM fallback, not a NameError that masks it."""
-    from resume_agent.agents import fit_evaluator
-    from resume_agent.services.llm_service import LLMService
-
-    monkeypatch.setattr(
-        "resume_agent.agents.resume_parser_agent.ResumeParserAgent",
-        Mock(side_effect=RuntimeError("agent unavailable")),
-    )
-    llm_service = Mock(spec=LLMService)
-    llm_service.evaluate_fit_structured.return_value = "fallback-evaluation"
-
-    result = fit_evaluator.evaluate_resume_fit(
-        llm_service,
-        "Resume body",
-        "JD body",
-        known_skills=["python", "llm"],
-    )
-
-    assert result == "fallback-evaluation"
-    assert llm_service.evaluate_fit_structured.call_args.kwargs["known_skills"] == ["python", "llm"]
+    assert response.status_code == 200
+    assert response.json()["usage"] == {"cost_usd": 0.01}

@@ -5,14 +5,11 @@ This agent ONLY evaluates fit - it does NOT tailor or modify anything.
 """
 
 from typing import Dict, List, Any, Optional, TYPE_CHECKING
-from pydantic import ValidationError
 from ..services.llm_service import LLMService
 from ..utils.logger import logger
 from ..utils.exceptions import FitEvaluationUnavailable
 from ..models.resume import FitEvaluation
 from ..models.agent_models import FitAnalysis, FitAnalysisStructured
-import json
-import re
 
 if TYPE_CHECKING:
     from ..models.agent_models import ParsedResume, AnalyzedJD
@@ -21,6 +18,14 @@ if TYPE_CHECKING:
 def _normalize_skill(skill: str) -> str:
     """Normalize skill for case-insensitive matching"""
     return skill.lower().strip()
+
+
+def _summarize(items: list, limit: int) -> str:
+    """Comma-joined head of a list, noting how many were left out."""
+    head = ", ".join(items[:limit])
+    if len(items) > limit:
+        head += f" (and {len(items) - limit} more)"
+    return head or "None"
 
 
 def _case_insensitive_skill_match(resume_skills: set, jd_skills: set) -> tuple:
@@ -93,154 +98,44 @@ class FitEvaluatorAgent:
         return evaluation
     
     def _analyze_fit(self, parsed_resume: "ParsedResume", analyzed_jd: "AnalyzedJD") -> FitAnalysis:
-        """Perform detailed fit analysis using LLM"""
-        from langchain_core.messages import SystemMessage, HumanMessage
-        
-        # Prepare structured data for LLM
+        """Judge fit, grounded in the resume text and a deterministic skill overlap.
+
+        The exact skill overlap is computed locally: it is free, it is not a
+        guess, and it gives the model a factual starting point. The prompt itself
+        lives in the task library.
+        """
         resume_skills = set(parsed_resume.all_skills)
-        resume_skills.update(self.confirmed_skills)  # Include confirmed skills
-        
-        jd_required = set(analyzed_jd.required_skills)
-        jd_preferred = set(analyzed_jd.preferred_skills)
-        
-        # Use case-insensitive matching for skills
-        matching_skills, missing_required = _case_insensitive_skill_match(resume_skills, jd_required)
-        matching_preferred, _ = _case_insensitive_skill_match(resume_skills, jd_preferred)
-        
-        prompt = SystemMessage(content="""You are a FIT EVALUATOR. Your ONLY job is to evaluate how well a candidate's resume matches a job description.
+        resume_skills.update(self.confirmed_skills)
 
-CRITICAL RULES:
-1. DISTINGUISH between skill types:
-   - TECHNICAL SKILLS: Java, Python, Docker, Kubernetes, AWS, Spring Boot, etc. (match literally)
-   - CONTEXTUAL REQUIREMENTS: "large codebases", "distributed systems", "cross-functional teams" (INFER from technical skills)
-   - SOFT SKILLS: Communication, teamwork, leadership (give less weight)
+        matching_skills, missing_required = _case_insensitive_skill_match(
+            resume_skills, set(analyzed_jd.required_skills)
+        )
+        matching_preferred, _ = _case_insensitive_skill_match(
+            resume_skills, set(analyzed_jd.preferred_skills)
+        )
 
-2. INFERENCE RULES for contextual requirements:
-   - Docker + Kubernetes + Kafka + AWS → IMPLIES "distributed systems" experience
-   - Spring Boot + Microservices + Docker → IMPLIES "modern software development"
-   - Any enterprise tech stack → IMPLIES "large codebases" experience
-   - Worked at multiple companies → IMPLIES "cross-functional" experience
-   - CI/CD + Jenkins + Git → IMPLIES "software development lifecycle" experience
+        raw_text = parsed_resume.raw_text or ""
+        education = ", ".join(
+            f"{entry.get('degree', '')} in {entry.get('field', '')}"
+            for entry in (parsed_resume.education or [])[:2]
+        )
 
-3. DO NOT penalize for missing generic/contextual requirements if the candidate has technical skills that demonstrate that experience
-
-4. FOCUS on actual technical skill gaps - these matter more than generic phrases
-
-5. Score Guidelines:
-   - 7-10: Strong match on core technical skills
-   - 5-6: Missing some technical skills but has related experience
-   - 3-4: Missing significant technical skills
-   - 1-2: Completely different domain/skills
-
-Respond with valid JSON only:
-{
-    "fit_score": <1-10>,
-    "should_apply": <true/false>,
-    "confidence": <0.0-1.0>,
-    "experience_match": "exceeds|meets|below",
-    "experience_gap_years": <number or null>,
-    "education_match": <true/false>,
-    "strengths": ["...", ...],
-    "weaknesses": ["...", ...],
-    "recommendations": ["...", ...],
-    "matching_areas": ["Include INFERRED matches like 'Distributed Systems (from Docker, Kubernetes, Kafka)'", ...],
-    "missing_areas": ["Only list ACTUAL technical skill gaps, not generic phrases", ...]
-}""")
-        
-        # Build concise comparison (truncate to avoid token limits)
-        skills_summary = ', '.join(parsed_resume.all_skills[:20])
-        if len(parsed_resume.all_skills) > 20:
-            skills_summary += f" (and {len(parsed_resume.all_skills) - 20} more)"
-        
-        required_skills_summary = ', '.join(analyzed_jd.required_skills[:15])
-        if len(analyzed_jd.required_skills) > 15:
-            required_skills_summary += f" (and {len(analyzed_jd.required_skills) - 15} more)"
-        
-        matching_summary = ', '.join(matching_skills[:10]) if matching_skills else 'None'
-        missing_summary = ', '.join(missing_required[:10]) if missing_required else 'None'
-        
-        # Categorize technical vs contextual requirements for better analysis
-        technical_skills_in_resume = [s for s in parsed_resume.all_skills if len(s) < 30]  # Technical skills are usually short
-        
-        comparison_text = f"""RESUME ANALYSIS:
-- Technical Skills: {skills_summary}
-- Total Skills Count: {len(parsed_resume.all_skills)} skills
-- Experience: {parsed_resume.total_years_experience or 'Not explicitly stated'} years
-- Job Titles: {', '.join(parsed_resume.job_titles[:3])}
-- Education: {', '.join([f"{e.get('degree', '')} in {e.get('field', '')}" for e in parsed_resume.education[:2]])}
-
-JOB REQUIREMENTS:
-- Required Skills/Requirements: {required_skills_summary}
-- Preferred Skills: {', '.join(analyzed_jd.preferred_skills[:10])}
-- Required Experience: {analyzed_jd.required_experience_years or 'Not specified'} years
-
-LITERAL MATCHING (case-insensitive):
-- Direct Matches: {matching_summary}
-- Not Literally Matched: {missing_summary}
-
-IMPORTANT: Many "missing" items above may be GENERIC REQUIREMENTS (like "large codebases", "distributed systems") 
-that should be INFERRED from the candidate's technical skills. 
-
-For example, if candidate has Docker, Kubernetes, Kafka, AWS, Spring Boot - they clearly have experience with 
-distributed systems and modern software development, even if those exact phrases aren't in their resume.
-
-Evaluate the TRUE fit considering both literal and inferred matches."""
-        
-        human_prompt = HumanMessage(content=comparison_text)
-        
-        # Note: retry logic is handled at module level, not per-call
-        def _analyze_and_validate():
-            response = self.llm_service.invoke_with_retry([prompt, human_prompt])
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group(0))
-                
-                # Validate using Pydantic model
-                try:
-                    structured_analysis = FitAnalysisStructured.model_validate(data)
-                    
-                    # Build complete FitAnalysis with matching data
-                    return FitAnalysis(
-                        fit_score=structured_analysis.fit_score,
-                        should_apply=structured_analysis.should_apply,
-                        confidence=structured_analysis.confidence,
-                        matching_skills=matching_skills,
-                        missing_required_skills=missing_required,
-                        matching_preferred_skills=matching_preferred,
-                        experience_match=structured_analysis.experience_match,
-                        experience_gap_years=structured_analysis.experience_gap_years,
-                        education_match=structured_analysis.education_match,
-                        missing_education=structured_analysis.missing_education,
-                        strengths=structured_analysis.strengths,
-                        weaknesses=structured_analysis.weaknesses,
-                        recommendations=structured_analysis.recommendations,
-                        matching_areas=structured_analysis.matching_areas,
-                        missing_areas=structured_analysis.missing_areas
-                    )
-                except ValidationError as validation_error:
-                    logger.warning(f"Pydantic validation failed for fit analysis, using fallback: {validation_error}")
-                    # Fallback to manual construction with defaults
-                    return FitAnalysis(
-                        fit_score=data.get("fit_score", 5),
-                        should_apply=data.get("should_apply", False),
-                        confidence=data.get("confidence", 0.5),
-                        matching_skills=matching_skills,
-                        missing_required_skills=missing_required,
-                        matching_preferred_skills=matching_preferred,
-                        experience_match=data.get("experience_match", "unknown"),
-                        experience_gap_years=data.get("experience_gap_years"),
-                        education_match=data.get("education_match", False),
-                        missing_education=data.get("missing_education", []),
-                        strengths=data.get("strengths", []),
-                        weaknesses=data.get("weaknesses", []),
-                        recommendations=data.get("recommendations", []),
-                        matching_areas=data.get("matching_areas", []),
-                        missing_areas=data.get("missing_areas", [])
-                    )
-            raise ValueError("No JSON found in LLM response")
-        
         try:
-            return _analyze_and_validate()
+            data = self.llm_service.run_task(
+                "fit.evaluate",
+                resume_excerpt=raw_text[:6000] + ("\n[resume truncated]" if len(raw_text) > 6000 else ""),
+                skills_summary=_summarize(parsed_resume.all_skills, 20),
+                skills_count=len(parsed_resume.all_skills),
+                experience_years=parsed_resume.total_years_experience or "Not explicitly stated",
+                job_titles=", ".join(parsed_resume.job_titles[:3]),
+                education=education,
+                required_skills=_summarize(analyzed_jd.required_skills, 15),
+                preferred_skills=", ".join(analyzed_jd.preferred_skills[:10]),
+                required_experience_years=analyzed_jd.required_experience_years or "Not specified",
+                matching_summary=", ".join(matching_skills[:10]) or "None",
+                missing_summary=", ".join(missing_required[:10]) or "None",
+            )
+            structured = FitAnalysisStructured.model_validate(data)
         except Exception as e:
             logger.error(f"Fit analysis failed: {e}", exc_info=True)
             # No usable judgement came back, so there is no score to report. The
@@ -250,3 +145,15 @@ Evaluate the TRUE fit considering both literal and inferred matches."""
             raise FitEvaluationUnavailable(
                 f"The model did not return a usable fit analysis: {e}"
             ) from e
+
+        return FitAnalysis(
+            fit_score=structured.fit_score,
+            should_apply=structured.should_apply,
+            confidence=structured.confidence,
+            matching_skills=matching_skills,
+            missing_required_skills=missing_required,
+            matching_preferred_skills=matching_preferred,
+            recommendations=structured.recommendations,
+            matching_areas=structured.matching_areas,
+            missing_areas=structured.missing_areas,
+        )

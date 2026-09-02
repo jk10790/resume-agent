@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from unittest.mock import Mock
+
 import pytest
 
 from resume_agent.config import settings
+from resume_agent.models.resume import FitEvaluation
 from resume_agent.services.discover_roles_service import DiscoverRolesService, DiscoverSearchCriteria
 from resume_agent.storage import user_store
 
@@ -159,30 +162,33 @@ def test_evaluate_role_fit_uses_stored_jd_and_persists_result(monkeypatch):
 
     calls = {}
 
-    def fake_load_resume_text(google_services, doc_ids):
-        calls["doc_ids"] = list(doc_ids)
-        return "Resume text"
+    class _StubOrchestrator:
+        def __init__(self, **kwargs):
+            calls["google_services"] = kwargs.get("google_services")
 
-    def fake_evaluate(**kwargs):
-        calls["kwargs"] = kwargs
-        return {
-            "score": 8,
-            "should_apply": True,
-            "confidence": "high",
-            "matching_areas": ["python"],
-            "missing_areas": ["kubernetes"],
-            "recommendations": ["Lead with the LLM work"],
-        }
+        def evaluate_fit(self, fit_request, **_kwargs):
+            calls["request"] = fit_request
+            return Mock(
+                evaluation=FitEvaluation(
+                    score=8,
+                    should_apply=True,
+                    confidence=0.9,
+                    matching_areas=["python"],
+                    missing_areas=["kubernetes"],
+                    recommendations=["Lead with the LLM work"],
+                ),
+                usage={},
+                steps=[],
+            )
 
-    monkeypatch.setattr("resume_agent.services.fit_evaluation_service.load_resume_text", fake_load_resume_text)
-    monkeypatch.setattr("resume_agent.services.fit_evaluation_service.evaluate_fit_for_jd", fake_evaluate)
+    monkeypatch.setattr("resume_agent.pipelines.ResumeOrchestrator", _StubOrchestrator)
 
     result = service.evaluate_role_fit(user["id"], role["id"], resume_doc_id="doc-123")
 
     # The stored posting text is what gets scored: no re-fetch of the apply URL.
-    assert calls["kwargs"]["jd_text"] == "Build applied AI systems in Python."
-    assert calls["kwargs"]["resume_text"] == "Resume text"
-    assert calls["doc_ids"][0] == "doc-123"
+    assert calls["request"].jd_text == "Build applied AI systems in Python."
+    assert calls["request"].resume_doc_id == "doc-123"
+    assert calls["request"].discovered_role_id == role["id"]
     assert result["evaluation"]["score"] == 8
     assert result["role"]["fit_score"] == 8
     assert result["role"]["fit_should_apply"] is True
@@ -200,18 +206,13 @@ def test_evaluate_role_fit_uses_stored_jd_and_persists_result(monkeypatch):
 
 
 def test_evaluate_role_fit_rejects_a_role_without_stored_text(monkeypatch):
-    from resume_agent.services.fit_evaluation_service import FitEvaluationError
+    from resume_agent.services.resume_source import ResumeUnavailable
 
     user = _fit_user("discover-service-fit-empty")
     role = _seed_role_for_fit(user["id"], raw_text="")
     service = DiscoverRolesService(provider=FakeATSProvider([]))
 
-    monkeypatch.setattr(
-        "resume_agent.services.fit_evaluation_service.load_resume_text",
-        lambda *_args, **_kwargs: "Resume text",
-    )
-
-    with pytest.raises(FitEvaluationError) as excinfo:
+    with pytest.raises(ResumeUnavailable) as excinfo:
         service.evaluate_role_fit(user["id"], role["id"])
     assert excinfo.value.code == "no_jd_text"
 

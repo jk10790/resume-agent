@@ -17,7 +17,7 @@ def main() -> int:
         return 2
     url = sys.argv[1].strip()
     llm_service = LLMService()
-    jd_text = extract_clean_jd(url, llm_service, max_retries=3)
+    jd_text = extract_clean_jd(url, llm_service)
     print(jd_text[:1500])
     return 0
 

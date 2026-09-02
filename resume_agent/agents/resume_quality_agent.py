@@ -606,16 +606,29 @@ class ResumeQualityAgent:
         ]
         
         for pattern in vague_achievement_patterns:
-            matches = re.findall(pattern, resume_text, re.IGNORECASE)
-            if matches:
+            # group(0), not findall: every pattern here has a capture group, so
+            # findall returned just the verb ("improved") and dropped the hedge
+            # word ("significantly") that made the phrase vague in the first place.
+            match = re.search(pattern, resume_text, re.IGNORECASE)
+            if match:
+                phrase = match.group(0)
+                # No `example` here on purpose. This issue's text is interpolated
+                # verbatim into the improver prompt, ahead of that prompt's own
+                # "do not invent numbers" rule -- so a worked example containing
+                # invented figures ("by 40%, from 3s to 1.8s") read as a template
+                # to copy, and is where fabricated metrics entered the resume.
+                # The ask is a more specific claim, not a number.
                 issues.append(QualityIssue(
                     category=QualityCategory.METRICS,
-                    severity=IssueSeverity.HIGH,
+                    severity=IssueSeverity.LOW,
                     section="Experience",
-                    issue=f"Vague achievement without metrics: '{matches[0]}'",
-                    suggestion="Quantify with specific numbers: 'Improved X by Y%, resulting in Z'",
-                    example="Instead of 'Significantly improved performance', write 'Improved response time by 40%, reducing user wait time from 3s to 1.8s'",
-                    research_note="Quantifying achievements increases hireability by 40%"
+                    issue=f"Vague wording: '{phrase}'",
+                    suggestion=(
+                        f"Replace '{phrase}' with what specifically changed. "
+                        "Use a number only if one already appears in this resume; "
+                        "otherwise name the concrete outcome in words."
+                    ),
+                    advisory_only=True,
                 ))
         
         # Warn if few metrics overall
@@ -669,7 +682,7 @@ class ResumeQualityAgent:
                 section="Experience",
                 issue=f"Weak action verbs detected: {', '.join(weak_verbs_found[:5])}",
                 suggestion=f"Replace with stronger verbs like: {', '.join(self.STRONG_VERBS[:5])}",
-                example="Instead of 'Helped with deployment', write 'Led deployment of 15 microservices'",
+                example="Instead of 'Helped with deployment', write 'Led the deployment'",
                 research_note="Recruiters spend only 10 seconds on initial review - strong verbs stand out"
             ))
         
@@ -1158,113 +1171,57 @@ Example answers:
         return issues
     
     def _analyze_content_llm(self, resume_text: str) -> List[QualityIssue]:
-        """
-        LLM-based content analysis (DEPRECATED - use rule-based instead).
-        Kept for reference but not called.
-        """
-        from langchain_core.messages import SystemMessage, HumanMessage
-        import json
-        import re
-        
-        prompt = SystemMessage(content="""You are a RESUME CONTENT ANALYZER. Check for content quality issues.
+        """Weak verbs, vagueness, passive voice. Prompt lives in the task library."""
+        return self._issues_from_task(
+            "quality.content", QualityCategory.CONTENT, resume_text, keep_example=True
+        )
 
-CHECK FOR:
-1. Weak action verbs (helped, worked on, assisted)
-2. Vague descriptions without specifics
-3. Passive voice instead of active voice
-4. Too much jargon or too little technical detail
-5. Responsibilities without achievements
-6. Spelling/grammar issues (if obvious)
-
-Respond with JSON only:
-{
-    "issues": [
-        {
-            "section": "Experience - Company X",
-            "issue": "Uses weak action verb 'helped'",
-            "suggestion": "Replace 'Helped with deployment' with 'Led deployment of...' or 'Deployed...'",
-            "example": "Led deployment of microservices to production, reducing downtime by 40%",
-            "severity": "medium"
-        }
-    ]
-}""")
-        
-        human_prompt = HumanMessage(content=f"""Analyze this resume for content quality issues:
-
-{resume_text[:3000]}""")
-        
-        try:
-            response = self.llm_service.invoke_with_retry([prompt, human_prompt])
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group(0))
-                issues = []
-                for item in data.get("issues", []):
-                    issues.append(QualityIssue(
-                        category=QualityCategory.CONTENT,
-                        severity=IssueSeverity[item.get("severity", "medium").upper()],
-                        section=item.get("section", "General"),
-                        issue=item.get("issue", ""),
-                        suggestion=item.get("suggestion", ""),
-                        example=item.get("example")
-                    ))
-                return issues
-        except Exception as e:
-            logger.error(f"Content analysis failed: {e}")
-        
-        return []
-    
     def _analyze_impact(self, resume_text: str) -> List[QualityIssue]:
-        """Analyze impact/metrics - quantification, achievements"""
-        from langchain_core.messages import SystemMessage, HumanMessage
-        import json
-        import re
-        
-        prompt = SystemMessage(content="""You are a RESUME IMPACT ANALYZER. Check for missing metrics and achievements.
+        """Achievements too vague to show impact.
 
-CHECK FOR:
-1. Bullet points without numbers/percentages
-2. Achievements not quantified (how much? how many? how fast?)
-3. No mention of scale (team size, user count, revenue impact)
-4. Missing before/after comparisons
-5. No business impact mentioned
+        This analyzer used to open with "Check for bullet points without
+        numbers/percentages" and illustrate the fix with an invented
+        "Reduced latency from Xms to Yms" -- which is where fabricated metrics
+        entered resumes. It now asks for a concrete outcome instead.
+        """
+        return self._issues_from_task("quality.impact", QualityCategory.IMPACT, resume_text)
 
-Respond with JSON only:
-{
-    "issues": [
-        {
-            "section": "Experience - Company X",
-            "issue": "Achievement 'Improved performance' lacks metrics",
-            "suggestion": "Quantify the improvement: 'Improved performance by X%' or 'Reduced latency from Xms to Yms'",
-            "severity": "high"
-        }
-    ]
-}""")
-        
-        human_prompt = HumanMessage(content=f"""Analyze this resume for missing metrics and impact:
-
-{resume_text[:3000]}""")
-        
+    def _issues_from_task(
+        self,
+        task_id: str,
+        category: "QualityCategory",
+        resume_text: str,
+        *,
+        keep_example: bool = False,
+    ) -> List[QualityIssue]:
+        """Run one analysis task and map its findings onto QualityIssues."""
         try:
-            response = self.llm_service.invoke_with_retry([prompt, human_prompt])
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group(0))
-                issues = []
-                for item in data.get("issues", []):
-                    issues.append(QualityIssue(
-                        category=QualityCategory.IMPACT,
-                        severity=IssueSeverity[item.get("severity", "medium").upper()],
-                        section=item.get("section", "General"),
-                        issue=item.get("issue", ""),
-                        suggestion=item.get("suggestion", "")
-                    ))
-                return issues
+            data = self.llm_service.run_task(task_id, resume_excerpt=resume_text[:3000])
         except Exception as e:
-            logger.error(f"Impact analysis failed: {e}")
-        
-        return []
-    
+            logger.error(f"Quality analysis '{task_id}' failed: {e}")
+            return []
+
+        findings = data.get("issues") if isinstance(data, dict) else None
+        if not isinstance(findings, list):
+            return []
+
+        issues: List[QualityIssue] = []
+        for item in findings:
+            if not isinstance(item, dict):
+                continue
+            severity = str(item.get("severity", "medium")).upper()
+            issues.append(
+                QualityIssue(
+                    category=category,
+                    severity=IssueSeverity[severity] if severity in IssueSeverity.__members__ else IssueSeverity.MEDIUM,
+                    section=item.get("section", "General"),
+                    issue=item.get("issue", ""),
+                    suggestion=item.get("suggestion", ""),
+                    example=item.get("example") if keep_example else None,
+                )
+            )
+        return issues
+
     def _calculate_score(self, issues: List[QualityIssue], resume_text: str) -> int:
         """Calculate overall quality score based on issues found"""
         # Start with base score
@@ -1396,47 +1353,14 @@ Respond with JSON only:
         max_resume_chars = 8000
         truncated_resume = deterministic_text[:max_resume_chars] if len(deterministic_text) > max_resume_chars else deterministic_text
         
-        prompt = SystemMessage(content=f"""You are a RESUME IMPROVER. Apply ONLY the listed improvements; do not add new changes beyond those.
-
-IMPROVEMENTS TO MAKE (only these):
-{improvements_text}
-{user_context}{extra_guidance}
-
-ABSOLUTE REQUIREMENTS:
-1. Output the ENTIRE resume from start to finish - DO NOT STOP EARLY
-2. Include EVERY job, EVERY bullet point, EVERY section from the original
-3. If the original has 4 jobs, output 4 jobs. If it has 20 bullet points, output 20 bullet points.
-4. DO NOT truncate, summarize, or shorten ANY section
-5. The output length should be SIMILAR to the input length
-6. ONLY fix the issues listed above (e.g. replace weak verbs, break long sentences into bullets). Do not change formatting, add/remove sections, or introduce new issues.
-
-FORMAT REQUIREMENTS:
-- Use **bold** for section headers (e.g., **WORK EXPERIENCE**)
-- Use **bold** for job titles with company and dates (e.g., **Senior Engineer, Company Name, Jan 2020 - Present**)
-- Use bullet points (• ) for achievements - use the actual bullet character •
-- Keep clean spacing between sections
-
-CONTENT RULES:
-- Preserve ALL original facts - DO NOT fabricate
-- DO NOT change job titles, company names, or dates
-- DO NOT invent specific numbers like "10 services", "15 tests", "20 APIs" unless the user provided them
-- Only add metrics/percentages if user provided them OR they were in the original
-- If no numbers are provided, use qualitative language instead of adding numbers
-- Use strong action verbs but keep the original scope
-- Treat user-provided notes as guidance, not paste-ready resume text
-- DO NOT copy any user-provided answer verbatim into the resume unless it already exists in the original resume
-- Refine user guidance into concise resume language and integrate it into existing bullets or summary lines only when it fits cleanly
-
-START OUTPUT IMMEDIATELY - no preamble.""")
-        
-        human_prompt = HumanMessage(content=f"""RESUME TO IMPROVE (output the COMPLETE improved version):
-
-{truncated_resume}
-
-OUTPUT THE ENTIRE IMPROVED RESUME NOW:""")
-        
         try:
-            improved = self.llm_service.invoke_with_retry([prompt, human_prompt], use_cache=False)
+            improved = self.llm_service.run_task(
+                "quality.improve",
+                improvements=improvements_text,
+                user_context=user_context,
+                extra_guidance=extra_guidance,
+                resume_text=truncated_resume,
+            )
             llm_metadata = dict(getattr(self.llm_service, "last_invoke_metadata", {}) or {})
             
             # Clean response
@@ -1874,34 +1798,15 @@ OUTPUT THE ENTIRE IMPROVED RESUME NOW:""")
         if not verbatim_snippets:
             return candidate_resume
 
-        from langchain_core.messages import SystemMessage, HumanMessage
-
         snippets_text = "\n".join(f"- {snippet}" for snippet in verbatim_snippets)
-        prompt = SystemMessage(content=f"""You are a RESUME EDITOR.
-
-The generated resume copied user notes too directly. Rewrite the affected lines so the resume sounds polished and professional.
-
-COPIED SNIPPETS TO ELIMINATE:
-{snippets_text}
-
-RULES:
-1. Do not paste or quote these snippets verbatim
-2. Preserve the underlying facts if they fit the resume
-3. Keep the same resume structure and sections
-4. Do not add new facts
-5. Return the full updated resume only""")
-
-        human_prompt = HumanMessage(content=f"""Original resume for fact grounding:
----
-{original_resume[:3000]}
-
-Generated resume to clean up:
----
-{candidate_resume}
-""")
 
         try:
-            cleaned = self.llm_service.invoke_with_retry([prompt, human_prompt]).strip()
+            cleaned = self.llm_service.run_task(
+                "quality.dequote",
+                snippets=snippets_text,
+                original_excerpt=original_resume[:3000],
+                candidate_resume=candidate_resume,
+            ).strip()
             if cleaned.startswith("```"):
                 lines = cleaned.split("\n")
                 if lines[0].startswith("```"):
@@ -1932,32 +1837,14 @@ Generated resume to clean up:
         if not metrics:
             return resume_text
 
-        from langchain_core.messages import SystemMessage, HumanMessage
-
         metrics_text = "\n".join(f"- {m}" for m in metrics)
 
-        prompt = SystemMessage(content=f"""You are a RESUME METRIC CLEANER.
-
-METRICS TO REMOVE OR SOFTEN:
-{metrics_text}
-
-RULES:
-1. Remove the numeric values for these metrics or rewrite the line qualitatively without numbers
-2. Do NOT remove valid numbers that are not listed
-3. Preserve formatting and structure
-4. Do NOT add new information
-
-Return ONLY the modified resume text.""")
-
-        human_prompt = HumanMessage(content=f"""Resume to fix:
----
-{resume_text}
----
-
-Remove or soften ONLY the listed metrics. Return only the fixed resume.""")
-
         try:
-            cleaned = self.llm_service.invoke_with_retry([prompt, human_prompt]).strip()
+            cleaned = self.llm_service.run_task(
+                "quality.strip_metrics",
+                metrics=metrics_text,
+                resume_text=resume_text,
+            ).strip()
 
             if cleaned.startswith("```"):
                 lines = cleaned.split("\n")

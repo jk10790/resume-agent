@@ -104,6 +104,32 @@ def test_routing_enabled_leaves_the_model_unset():
     assert pipeline.requests[0].model is None
 
 
+def test_declared_tier_pins_that_tier_s_model():
+    """A call site that names a tier must get that tier, not a classified guess.
+
+    taut's classifier scores on length and keyword hits, and its length factor
+    saturates at exactly the "simple" threshold -- so the revision and fit calls
+    landed on the cheap tier by accident while the draft did not.
+    """
+    pipeline = _FakePipeline()
+    provider = _provider(pipeline)
+
+    provider.invoke([SystemMessage(content="Rewrite this resume.")], tier="complex")
+    provider.invoke([SystemMessage(content="Extract education.")], tier="simple")
+
+    assert pipeline.requests[0].model == TIERS["complex"][0]
+    assert pipeline.requests[1].model == TIERS["simple"][0]
+
+
+def test_unknown_tier_falls_back_to_the_classifier():
+    pipeline = _FakePipeline()
+    provider = _provider(pipeline)
+
+    provider.invoke([SystemMessage(content="Extract education.")], tier="nonexistent")
+
+    assert pipeline.requests[0].model is None
+
+
 def test_routing_disabled_pins_the_default_model():
     pipeline = _FakePipeline()
     provider = _provider(pipeline, routing_enabled=False)

@@ -144,7 +144,7 @@ Senior Software Engineer | Mastercard
 
 def test_refine_single_entry_only_rewrites_targeted_line():
     llm_service = Mock()
-    llm_service.invoke_with_retry.return_value = "- Delivered scalable backend services with stronger technical emphasis"
+    llm_service.run_task.return_value = "- Delivered scalable backend services with stronger technical emphasis"
     agent = ResumeTailorAgent(llm_service, confirmed_skills=[])
     current_resume = """## Summary
 Software engineer with backend experience.
@@ -274,6 +274,8 @@ def test_build_tailoring_context_uses_enabled_strategy_directives_only():
     )
 
     assert "Highlight platform engineering" in context
-    assert "Disabled Directives" in context
-    assert "Add Kubernetes expertise" in context
+    # A directive the user switched off is filtered out, not listed as one to
+    # skip: naming it in the prompt is what makes a model likelier to act on it.
+    assert "Disabled Directives" not in context
+    assert "Add Kubernetes expertise" not in context
     assert "Do Not Add Unsupported Claims For: Kubernetes" in context

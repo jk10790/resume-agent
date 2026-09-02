@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     taut_tier_complex: str = Field(
         "anthropic/claude-sonnet-4-5-20250929", validation_alias=AliasChoices('TAUT_TIER_COMPLEX')
     )
-    taut_timeout: float = Field(60.0, validation_alias=AliasChoices('TAUT_TIMEOUT'))
+    taut_timeout: float = Field(180.0, validation_alias=AliasChoices('TAUT_TIMEOUT'))  # The strategy brief writes a large JSON document and routinely runs past 60s; a shorter timeout just buys a retry that costs another full attempt.
 
     application_db_path: Optional[str] = Field(None, validation_alias=AliasChoices('APPLICATION_DB_PATH'))
     memory_file: Optional[str] = Field(None, validation_alias=AliasChoices('MEMORY_FILE'))
@@ -87,12 +87,12 @@ class Settings(BaseSettings):
     
     # LLM Service Configuration
     llm_cache_size: int = Field(100, validation_alias=AliasChoices('LLM_CACHE_SIZE'))
+    llm_cache_ttl_hours: int = Field(168, validation_alias=AliasChoices('LLM_CACHE_TTL_HOURS'))
     llm_max_retries: int = Field(3, validation_alias=AliasChoices('LLM_MAX_RETRIES'))
     llm_retry_delay: float = Field(1.0, validation_alias=AliasChoices('LLM_RETRY_DELAY'))
     
     # JD Extraction Configuration
     jd_extraction_timeout: int = Field(10, validation_alias=AliasChoices('JD_EXTRACTION_TIMEOUT'))
-    jd_extraction_max_retries: int = Field(3, validation_alias=AliasChoices('JD_EXTRACTION_MAX_RETRIES'))
     jd_text_limit: int = Field(8000, validation_alias=AliasChoices('JD_TEXT_LIMIT'))
     
     # Google API Configuration
@@ -106,6 +106,7 @@ class Settings(BaseSettings):
     
     # ATS Scoring Configuration
     ats_min_score: int = Field(70, validation_alias=AliasChoices('ATS_MIN_SCORE'))  # Minimum acceptable ATS score
+    ats_scoring_min_fit_score: int = Field(6, validation_alias=AliasChoices('ATS_SCORING_MIN_FIT_SCORE'))  # Below this fit score, skip ATS scoring
     ats_table_penalty: int = Field(20, validation_alias=AliasChoices('ATS_TABLE_PENALTY'))
     ats_missing_sections_penalty: int = Field(15, validation_alias=AliasChoices('ATS_MISSING_SECTIONS_PENALTY'))
     ats_short_penalty: int = Field(10, validation_alias=AliasChoices('ATS_SHORT_PENALTY'))
@@ -120,32 +121,13 @@ class Settings(BaseSettings):
     # Tailoring Configuration
     tailoring_intensity_default: str = Field("medium", validation_alias=AliasChoices('TAILORING_INTENSITY_DEFAULT'))
     tailoring_allowed_intensities: str = Field("light,medium,heavy", validation_alias=AliasChoices('TAILORING_ALLOWED_INTENSITIES'))
-    tailoring_enable_critique: bool = Field(True, validation_alias=AliasChoices('TAILORING_ENABLE_CRITIQUE'))
-    tailoring_run_validation: bool = Field(False, validation_alias=AliasChoices('TAILORING_RUN_VALIDATION'))
-    quality_auto_run_if_missing: bool = Field(True, validation_alias=AliasChoices('QUALITY_AUTO_RUN_IF_MISSING'))
+    tailoring_validation_mode: str = Field('rules', validation_alias=AliasChoices('TAILORING_VALIDATION_MODE'))
+    quality_auto_run_if_missing: bool = Field(False, validation_alias=AliasChoices('QUALITY_AUTO_RUN_IF_MISSING'))
     quality_low_score_threshold: int = Field(70, validation_alias=AliasChoices('QUALITY_LOW_SCORE_THRESHOLD'))
 
-    # Tailoring Critic LLM Configuration (optional overrides)
-    tailoring_critic_provider: Optional[str] = Field(None, validation_alias=AliasChoices('TAILORING_CRITIC_PROVIDER'))
-    tailoring_critic_model: Optional[str] = Field(None, validation_alias=AliasChoices('TAILORING_CRITIC_MODEL'))
-    tailoring_critic_temperature: float = Field(0.2, validation_alias=AliasChoices('TAILORING_CRITIC_TEMPERATURE'))
-    tailoring_critic_top_p: float = Field(0.9, validation_alias=AliasChoices('TAILORING_CRITIC_TOP_P'))
-    tailoring_critic_max_tokens: int = Field(2000, validation_alias=AliasChoices('TAILORING_CRITIC_MAX_TOKENS'))
 
-    # Tailoring Revision LLM Configuration (optional overrides)
-    tailoring_revision_provider: Optional[str] = Field(None, validation_alias=AliasChoices('TAILORING_REVISION_PROVIDER'))
-    tailoring_revision_model: Optional[str] = Field(None, validation_alias=AliasChoices('TAILORING_REVISION_MODEL'))
-    tailoring_revision_temperature: float = Field(0.2, validation_alias=AliasChoices('TAILORING_REVISION_TEMPERATURE'))
-    tailoring_revision_top_p: float = Field(0.9, validation_alias=AliasChoices('TAILORING_REVISION_TOP_P'))
-    tailoring_revision_max_tokens: int = Field(4000, validation_alias=AliasChoices('TAILORING_REVISION_MAX_TOKENS'))
 
-    # Humanizer LLM Configuration (optional overrides)
     humanizer_enabled: bool = Field(True, validation_alias=AliasChoices('HUMANIZER_ENABLED'))
-    humanizer_provider: Optional[str] = Field(None, validation_alias=AliasChoices('HUMANIZER_PROVIDER'))
-    humanizer_model: Optional[str] = Field(None, validation_alias=AliasChoices('HUMANIZER_MODEL'))
-    humanizer_temperature: float = Field(0.2, validation_alias=AliasChoices('HUMANIZER_TEMPERATURE'))
-    humanizer_top_p: float = Field(0.9, validation_alias=AliasChoices('HUMANIZER_TOP_P'))
-    humanizer_max_tokens: int = Field(3000, validation_alias=AliasChoices('HUMANIZER_MAX_TOKENS'))
     
     # Approval Workflow Configuration
     approval_timeout_seconds: int = Field(3600, validation_alias=AliasChoices('APPROVAL_TIMEOUT_SECONDS'))  # 1 hour default
@@ -288,15 +270,15 @@ except (PermissionError, OSError, FileNotFoundError) as e:
         taut_tier_simple: str = Field("anthropic/claude-haiku-4-5-20251001", validation_alias=AliasChoices('TAUT_TIER_SIMPLE'))
         taut_tier_standard: str = Field("anthropic/claude-sonnet-4-5-20250929", validation_alias=AliasChoices('TAUT_TIER_STANDARD'))
         taut_tier_complex: str = Field("anthropic/claude-sonnet-4-5-20250929", validation_alias=AliasChoices('TAUT_TIER_COMPLEX'))
-        taut_timeout: float = Field(60.0, validation_alias=AliasChoices('TAUT_TIMEOUT'))
+        taut_timeout: float = Field(180.0, validation_alias=AliasChoices('TAUT_TIMEOUT'))  # The strategy brief writes a large JSON document and routinely runs past 60s; a shorter timeout just buys a retry that costs another full attempt.
         application_db_path: Optional[str] = Field(None, validation_alias=AliasChoices('APPLICATION_DB_PATH'))
         memory_file: Optional[str] = Field(None, validation_alias=AliasChoices('MEMORY_FILE'))
         log_file: Optional[str] = Field(None, validation_alias=AliasChoices('LOG_FILE'))
         llm_cache_size: int = Field(100, validation_alias=AliasChoices('LLM_CACHE_SIZE'))
+        llm_cache_ttl_hours: int = Field(168, validation_alias=AliasChoices('LLM_CACHE_TTL_HOURS'))
         llm_max_retries: int = Field(3, validation_alias=AliasChoices('LLM_MAX_RETRIES'))
         llm_retry_delay: float = Field(1.0, validation_alias=AliasChoices('LLM_RETRY_DELAY'))
         jd_extraction_timeout: int = Field(10, validation_alias=AliasChoices('JD_EXTRACTION_TIMEOUT'))
-        jd_extraction_max_retries: int = Field(3, validation_alias=AliasChoices('JD_EXTRACTION_MAX_RETRIES'))
         jd_text_limit: int = Field(8000, validation_alias=AliasChoices('JD_TEXT_LIMIT'))
         google_api_timeout: int = Field(60, validation_alias=AliasChoices('GOOGLE_API_TIMEOUT'))
         resume_min_words: int = Field(200, validation_alias=AliasChoices('RESUME_MIN_WORDS'))
@@ -304,6 +286,7 @@ except (PermissionError, OSError, FileNotFoundError) as e:
         resume_recommended_min_words: int = Field(300, validation_alias=AliasChoices('RESUME_RECOMMENDED_MIN_WORDS'))
         resume_recommended_max_words: int = Field(800, validation_alias=AliasChoices('RESUME_RECOMMENDED_MAX_WORDS'))
         ats_min_score: int = Field(70, validation_alias=AliasChoices('ATS_MIN_SCORE'))
+        ats_scoring_min_fit_score: int = Field(6, validation_alias=AliasChoices('ATS_SCORING_MIN_FIT_SCORE'))
         ats_table_penalty: int = Field(20, validation_alias=AliasChoices('ATS_TABLE_PENALTY'))
         ats_missing_sections_penalty: int = Field(15, validation_alias=AliasChoices('ATS_MISSING_SECTIONS_PENALTY'))
         ats_short_penalty: int = Field(10, validation_alias=AliasChoices('ATS_SHORT_PENALTY'))
@@ -314,26 +297,10 @@ except (PermissionError, OSError, FileNotFoundError) as e:
         resume_section_name_mappings: Optional[str] = Field(None, validation_alias=AliasChoices('RESUME_SECTION_MAPPINGS'))
         tailoring_intensity_default: str = Field("medium", validation_alias=AliasChoices('TAILORING_INTENSITY_DEFAULT'))
         tailoring_allowed_intensities: str = Field("light,medium,heavy", validation_alias=AliasChoices('TAILORING_ALLOWED_INTENSITIES'))
-        tailoring_enable_critique: bool = Field(True, validation_alias=AliasChoices('TAILORING_ENABLE_CRITIQUE'))
-        tailoring_run_validation: bool = Field(False, validation_alias=AliasChoices('TAILORING_RUN_VALIDATION'))
-        quality_auto_run_if_missing: bool = Field(True, validation_alias=AliasChoices('QUALITY_AUTO_RUN_IF_MISSING'))
+        tailoring_validation_mode: str = Field('rules', validation_alias=AliasChoices('TAILORING_VALIDATION_MODE'))
+        quality_auto_run_if_missing: bool = Field(False, validation_alias=AliasChoices('QUALITY_AUTO_RUN_IF_MISSING'))
         quality_low_score_threshold: int = Field(70, validation_alias=AliasChoices('QUALITY_LOW_SCORE_THRESHOLD'))
-        tailoring_critic_provider: Optional[str] = Field(None, validation_alias=AliasChoices('TAILORING_CRITIC_PROVIDER'))
-        tailoring_critic_model: Optional[str] = Field(None, validation_alias=AliasChoices('TAILORING_CRITIC_MODEL'))
-        tailoring_critic_temperature: float = Field(0.2, validation_alias=AliasChoices('TAILORING_CRITIC_TEMPERATURE'))
-        tailoring_critic_top_p: float = Field(0.9, validation_alias=AliasChoices('TAILORING_CRITIC_TOP_P'))
-        tailoring_critic_max_tokens: int = Field(2000, validation_alias=AliasChoices('TAILORING_CRITIC_MAX_TOKENS'))
-        tailoring_revision_provider: Optional[str] = Field(None, validation_alias=AliasChoices('TAILORING_REVISION_PROVIDER'))
-        tailoring_revision_model: Optional[str] = Field(None, validation_alias=AliasChoices('TAILORING_REVISION_MODEL'))
-        tailoring_revision_temperature: float = Field(0.2, validation_alias=AliasChoices('TAILORING_REVISION_TEMPERATURE'))
-        tailoring_revision_top_p: float = Field(0.9, validation_alias=AliasChoices('TAILORING_REVISION_TOP_P'))
-        tailoring_revision_max_tokens: int = Field(4000, validation_alias=AliasChoices('TAILORING_REVISION_MAX_TOKENS'))
         humanizer_enabled: bool = Field(True, validation_alias=AliasChoices('HUMANIZER_ENABLED'))
-        humanizer_provider: Optional[str] = Field(None, validation_alias=AliasChoices('HUMANIZER_PROVIDER'))
-        humanizer_model: Optional[str] = Field(None, validation_alias=AliasChoices('HUMANIZER_MODEL'))
-        humanizer_temperature: float = Field(0.2, validation_alias=AliasChoices('HUMANIZER_TEMPERATURE'))
-        humanizer_top_p: float = Field(0.9, validation_alias=AliasChoices('HUMANIZER_TOP_P'))
-        humanizer_max_tokens: int = Field(3000, validation_alias=AliasChoices('HUMANIZER_MAX_TOKENS'))
         approval_timeout_seconds: int = Field(3600, validation_alias=AliasChoices('APPROVAL_TIMEOUT_SECONDS'))
         approval_storage_backend: str = Field("memory", validation_alias=AliasChoices('APPROVAL_STORAGE_BACKEND'))
         discover_enabled: bool = Field(False, validation_alias=AliasChoices('DISCOVER_ENABLED'))
